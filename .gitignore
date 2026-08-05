@@ -17,7 +17,7 @@ pushall.sh
 
 # Local coding-agent docs and config
 /AGENTS.md
-/CLAUDE.md
+# /CLAUDE.md
 /GEMINI.md
 /.aider*
 /.cursor/
