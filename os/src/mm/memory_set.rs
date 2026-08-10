@@ -1,4 +1,4 @@
-use super::{FrameTracker, frame_alloc};
+use super::{FrameTracker, frame_alloc, frame_allocated_count, frame_ref_count};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
@@ -36,6 +36,13 @@ pub fn kernel_token() -> usize {
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CowForkStats {
+    pub shared_pages: usize,
+    pub copied_pages: usize,
+    pub allocated_frames: usize,
 }
 
 impl MemorySet {
@@ -230,6 +237,97 @@ impl MemorySet {
             }
         }
         memory_set
+    }
+    pub fn from_existed_user_cow(user_space: &mut MemorySet) -> (MemorySet, CowForkStats) {
+        let before = frame_allocated_count();
+        let mut memory_set = Self::new_bare();
+        memory_set.map_trampoline();
+        let mut shared_pages = 0;
+        let mut copied_pages = 0;
+
+        let parent_page_table = &mut user_space.page_table;
+        for area in user_space.areas.iter_mut() {
+            let mut new_area = MapArea::from_another(area);
+            for vpn in area.vpn_range {
+                let parent_pte = parent_page_table.translate(vpn).unwrap();
+                let ppn = parent_pte.ppn();
+                let flags = parent_pte.flags();
+
+                if parent_pte.user_accessible() {
+                    assert_eq!(area.map_type, MapType::Framed);
+                    let shared_frame = area
+                        .data_frames
+                        .get(&vpn)
+                        .expect("user page has no FrameTracker")
+                        .clone();
+                    new_area.data_frames.insert(vpn, shared_frame);
+
+                    if parent_pte.writable() || parent_pte.is_cow() {
+                        parent_page_table.mark_cow(vpn);
+                        memory_set.page_table.map_cow(vpn, ppn, flags);
+                    } else {
+                        memory_set.page_table.map(vpn, ppn, flags);
+                    }
+                    shared_pages += 1;
+                } else {
+                    new_area.map_one(&mut memory_set.page_table, vpn);
+                    let dst_ppn = memory_set.page_table.translate(vpn).unwrap().ppn();
+                    dst_ppn
+                        .get_bytes_array()
+                        .copy_from_slice(ppn.get_bytes_array());
+                    copied_pages += 1;
+                }
+            }
+            memory_set.areas.push(new_area);
+        }
+
+        unsafe { asm!("sfence.vma") };
+        let allocated_frames = frame_allocated_count() - before;
+        (
+            memory_set,
+            CowForkStats {
+                shared_pages,
+                copied_pages,
+                allocated_frames,
+            },
+        )
+    }
+    pub fn handle_cow_fault(&mut self, fault_va: VirtAddr) -> bool {
+        let vpn = fault_va.floor();
+        let pte = match self.page_table.translate(vpn) {
+            Some(pte) if pte.is_valid() && pte.user_accessible() && pte.is_cow() => pte,
+            _ => return false,
+        };
+        let old_ppn = pte.ppn();
+
+        if frame_ref_count(old_ppn) == 1 {
+            self.page_table.resolve_cow(vpn, old_ppn);
+            unsafe { asm!("sfence.vma") };
+            return true;
+        }
+
+        let new_frame = frame_alloc().expect("COW fault: out of physical memory");
+        let new_ppn = new_frame.ppn;
+        new_ppn
+            .get_bytes_array()
+            .copy_from_slice(old_ppn.get_bytes_array());
+
+        let area = self
+            .areas
+            .iter_mut()
+            .find(|area| area.vpn_range.get_start() <= vpn && vpn < area.vpn_range.get_end());
+        let area = match area {
+            Some(area) if area.map_type == MapType::Framed => area,
+            _ => return false,
+        };
+        let old_frame = area
+            .data_frames
+            .insert(vpn, new_frame)
+            .expect("COW page has no FrameTracker");
+        self.page_table.resolve_cow(vpn, new_ppn);
+        drop(old_frame);
+        unsafe { asm!("sfence.vma") };
+        true
     }
     pub fn activate(&self) {
         let satp = self.page_table.token();
