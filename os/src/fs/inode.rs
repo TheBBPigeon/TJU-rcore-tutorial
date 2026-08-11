@@ -213,8 +213,8 @@ pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
         None => return -1,
     };
 
-    // Same directory: simple rename
-    if Arc::ptr_eq(&old_parent, &new_parent) {
+    // Same directory: simple rename (compare by inode number, not Arc pointer)
+    if old_parent.inode_number() == new_parent.inode_number() {
         return if old_parent.rename(old_name, new_name) { 0 } else { -1 };
     }
 
