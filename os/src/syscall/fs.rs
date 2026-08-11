@@ -161,11 +161,16 @@ pub fn sys_chdir(path: *const u8) -> isize {
                 return -1;
             }
             let new_path = if path.starts_with('/') {
-                if path == "/" {
+                // Absolute path: normalize multiple slashes
+                let trimmed = path.trim_matches('/');
+                if trimmed.is_empty() {
                     String::from("/")
                 } else {
-                    String::from(path.trim_end_matches('/'))
+                    String::from("/") + trimmed
                 }
+            } else if path == "." {
+                // cd . stays in the same directory
+                old_path.clone()
             } else if old_path == "/" {
                 String::from("/") + &path
             } else {

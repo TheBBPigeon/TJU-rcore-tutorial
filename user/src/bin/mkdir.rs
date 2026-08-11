@@ -9,7 +9,10 @@ use user_lib::mkdir;
 
 #[unsafe(no_mangle)]
 pub fn main(argc: usize, argv: &[&str]) -> i32 {
-    assert!(argc >= 2, "Usage: mkdir <directory>");
+    if argc < 2 {
+        println!("Usage: mkdir <directory>");
+        return -1;
+    }
     let path = argv[1];
     let result = mkdir(path);
     if result < 0 {

@@ -9,7 +9,10 @@ use user_lib::unlink;
 
 #[unsafe(no_mangle)]
 pub fn main(argc: usize, argv: &[&str]) -> i32 {
-    assert!(argc >= 2, "Usage: rm <file>");
+    if argc < 2 {
+        println!("Usage: rm <file>");
+        return -1;
+    }
     let path = argv[1];
     let result = unlink(path);
     if result < 0 {

@@ -124,7 +124,9 @@ pub fn open_file_at(
             if inode.is_dir() {
                 return None;
             }
-            inode.clear();
+            if flags.contains(OpenFlags::TRUNC) {
+                inode.clear();
+            }
             Some(Arc::new(OSInode::new(readable, writable, inode)))
         } else {
             parent
@@ -184,6 +186,9 @@ pub fn list_directory_at(root: &Arc<Inode>, path: &str) -> Option<Vec<String>> {
     } else {
         lookup_path_from(root, path)?
     };
+    if !dir.is_dir() {
+        return None;
+    }
     Some(dir.ls())
 }
 
