@@ -149,6 +149,29 @@ pub fn sys_rename(old_path: *const u8, new_path: *const u8) -> isize {
     rename_at(&root, old_path.as_str(), new_path.as_str())
 }
 
+/// Normalize a path by removing "." and empty components.
+fn normalize_path(path: &str) -> String {
+    let mut result = String::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            _ => {
+                if !result.is_empty() {
+                    result.push('/');
+                }
+                result.push_str(component);
+            }
+        }
+    }
+    if result.is_empty() {
+        String::from("/")
+    } else if path.starts_with('/') {
+        String::from("/") + &result
+    } else {
+        result
+    }
+}
+
 /// Change the current working directory.
 pub fn sys_chdir(path: *const u8) -> isize {
     let token = current_user_token();
@@ -195,6 +218,8 @@ pub fn sys_chdir(path: *const u8) -> isize {
             } else {
                 old_path + "/" + &path
             };
+            // Normalize: strip "/./" and trailing "/." components
+            let new_path = normalize_path(&new_path);
             let mut inner = process.inner_exclusive_access();
             inner.set_working_directory(new_inode);
             inner.set_working_directory_path(new_path);
