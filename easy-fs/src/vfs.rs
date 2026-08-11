@@ -259,6 +259,13 @@ impl Inode {
         self.find(component)
     }
 
+    /// Set the parent inode number (used when moving directories).
+    pub fn set_parent_inode(&self, parent_id: u32) {
+        self.modify_disk_inode(|disk_inode| {
+            disk_inode.parent_inode = parent_id;
+        });
+    }
+
     /// Check if this inode is a directory.
     pub fn is_dir(&self) -> bool {
         self.read_disk_inode(|disk_inode| disk_inode.is_dir())
@@ -358,6 +365,30 @@ impl Inode {
         disk_inode.write_at(DIRENT_SZ * (file_count - 1), empty_dirent.as_bytes(), &self.block_device);
         // Reduce directory size
         disk_inode.size = ((file_count - 1) * DIRENT_SZ) as u32;
+        true
+    }
+
+    /// Link an existing inode into this directory with the given name.
+    /// Returns false if the name already exists.
+    pub fn link(&self, name: &str, target_inode_id: u32) -> bool {
+        if name == "." || name == ".." {
+            return false;
+        }
+        let mut fs = self.fs.lock();
+        let exists = self.read_disk_inode(|disk_inode| {
+            self.find_inode_id(name, disk_inode).is_some()
+        });
+        if exists {
+            return false;
+        }
+        self.modify_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            self.increase_size(new_size as u32, disk_inode, &mut fs);
+            let dirent = DirEntry::new(name, target_inode_id);
+            disk_inode.write_at(file_count * DIRENT_SZ, dirent.as_bytes(), &self.block_device);
+        });
+        block_cache_sync_all();
         true
     }
 

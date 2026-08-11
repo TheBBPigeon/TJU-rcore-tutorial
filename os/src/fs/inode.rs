@@ -177,16 +177,13 @@ pub fn unlink_at(root: &Arc<Inode>, path: &str) -> isize {
     }
 }
 
-/// Rename a file or directory within the same parent directory.
-/// Returns 0 on success, -1 on failure.
+/// Rename/move a file or directory. Handles both same-directory rename
+/// and cross-directory move. Returns 0 on success, -1 on failure.
 pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
     let (old_parent_path, old_name) = split_path(old_path);
     let (new_parent_path, new_name) = split_path(new_path);
-    // Both must be in the same directory
-    if old_parent_path != new_parent_path {
-        return -1;
-    }
-    let parent = if old_parent_path.is_empty() || old_parent_path == "/" {
+
+    let old_parent = if old_parent_path.is_empty() || old_parent_path == "/" {
         root.clone()
     } else {
         match lookup_path_from(root, old_parent_path) {
@@ -194,7 +191,39 @@ pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
             None => return -1,
         }
     };
-    if parent.rename(old_name, new_name) { 0 } else { -1 }
+    let new_parent = if new_parent_path.is_empty() || new_parent_path == "/" {
+        root.clone()
+    } else {
+        match lookup_path_from(root, new_parent_path) {
+            Some(p) => p,
+            None => return -1,
+        }
+    };
+
+    // Same directory: simple rename
+    if Arc::ptr_eq(&old_parent, &new_parent) {
+        return if old_parent.rename(old_name, new_name) { 0 } else { -1 };
+    }
+
+    // Cross-directory move: link target inode into new parent, then unlink from old
+    let source_inode = match old_parent.find(old_name) {
+        Some(inode) => inode,
+        None => return -1,
+    };
+    let source_id = source_inode.inode_number();
+
+    // Link into new directory
+    if !new_parent.link(new_name, source_id) {
+        return -1;
+    }
+    // Update parent_inode if moving a directory
+    if source_inode.is_dir() {
+        let new_parent_id = new_parent.inode_number();
+        source_inode.set_parent_inode(new_parent_id);
+    }
+    // Unlink from old directory
+    old_parent.unlink(old_name);
+    0
 }
 
 /// List the contents of a directory at a given path relative to a root inode.
