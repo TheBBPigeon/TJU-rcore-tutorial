@@ -221,8 +221,8 @@ pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
         let new_parent_id = new_parent.inode_number();
         source_inode.set_parent_inode(new_parent_id);
     }
-    // Unlink from old directory
-    old_parent.unlink(old_name);
+    // Detach from old directory (keep inode and data intact)
+    old_parent.detach(old_name);
     0
 }
 

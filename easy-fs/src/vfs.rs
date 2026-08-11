@@ -429,6 +429,20 @@ impl Inode {
         true
     }
 
+    /// Remove a directory entry from this directory without deallocating
+    /// the target inode. Used by rename/move operations. Returns true on success.
+    pub fn detach(&self, name: &str) -> bool {
+        if name == "." || name == ".." {
+            return false;
+        }
+        let mut fs = self.fs.lock();
+        let result = self.modify_disk_inode(|disk_inode| {
+            self.remove_directory_entry(name, disk_inode)
+        });
+        block_cache_sync_all();
+        result
+    }
+
     /// Unlink (remove) a directory entry from this directory and deallocate
     /// the target inode and its data blocks. For files, this is equivalent to
     /// `rm`. For directories, the directory must be empty.
