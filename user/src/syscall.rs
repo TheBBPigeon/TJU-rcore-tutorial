@@ -16,6 +16,12 @@ const SYSCALL_GETPID: usize = 172;
 const SYSCALL_FORK: usize = 220;
 const SYSCALL_EXEC: usize = 221;
 const SYSCALL_WAITPID: usize = 260;
+const SYSCALL_MKDIR: usize = 34;
+const SYSCALL_UNLINK: usize = 35;
+const SYSCALL_CHDIR: usize = 49;
+const SYSCALL_GETDENTS: usize = 61;
+const SYSCALL_GETCWD: usize = 79;
+const SYSCALL_LSEEK: usize = 62;
 const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
@@ -47,6 +53,15 @@ fn syscall(id: usize, args: [usize; 3]) -> isize {
     ret
 }
 
+/// Null-terminate a path string so the kernel's `translated_str` can find the end.
+/// Returns a stack-allocated null-terminated byte array.
+fn null_terminated_path(path: &str) -> [u8; 256] {
+    let mut buf = [0u8; 256];
+    let len = if path.len() > 255 { 255 } else { path.len() };
+    buf[..len].copy_from_slice(&path.as_bytes()[..len]);
+    buf
+}
+
 pub fn sys_dup(fd: usize) -> isize {
     syscall(SYSCALL_DUP, [fd, 0, 0])
 }
@@ -68,7 +83,8 @@ pub fn sys_accept(socket_fd: usize) -> isize {
 }
 
 pub fn sys_open(path: &str, flags: u32) -> isize {
-    syscall(SYSCALL_OPEN, [path.as_ptr() as usize, flags as usize, 0])
+    let path_buf = null_terminated_path(path);
+    syscall(SYSCALL_OPEN, [path_buf.as_ptr() as usize, flags as usize, 0])
 }
 
 pub fn sys_close(fd: usize) -> isize {
@@ -120,9 +136,10 @@ pub fn sys_fork() -> isize {
 }
 
 pub fn sys_exec(path: &str, args: &[*const u8]) -> isize {
+    let path_buf = null_terminated_path(path);
     syscall(
         SYSCALL_EXEC,
-        [path.as_ptr() as usize, args.as_ptr() as usize, 0],
+        [path_buf.as_ptr() as usize, args.as_ptr() as usize, 0],
     )
 }
 
@@ -176,6 +193,41 @@ pub fn sys_condvar_signal(condvar_id: usize) -> isize {
 
 pub fn sys_condvar_wait(condvar_id: usize, mutex_id: usize) -> isize {
     syscall(SYSCALL_CONDVAR_WAIT, [condvar_id, mutex_id, 0])
+}
+
+pub fn sys_mkdir(path: &str) -> isize {
+    let path_buf = null_terminated_path(path);
+    syscall(SYSCALL_MKDIR, [path_buf.as_ptr() as usize, 0, 0])
+}
+
+pub fn sys_unlink(path: &str) -> isize {
+    let path_buf = null_terminated_path(path);
+    syscall(SYSCALL_UNLINK, [path_buf.as_ptr() as usize, 0, 0])
+}
+
+pub fn sys_chdir(path: &str) -> isize {
+    let path_buf = null_terminated_path(path);
+    syscall(SYSCALL_CHDIR, [path_buf.as_ptr() as usize, 0, 0])
+}
+
+pub fn sys_getdents(path: &str, buf: &mut [u8]) -> isize {
+    let path_buf = null_terminated_path(path);
+    syscall(
+        SYSCALL_GETDENTS,
+        [
+            path_buf.as_ptr() as usize,
+            buf.as_mut_ptr() as usize,
+            buf.len(),
+        ],
+    )
+}
+
+pub fn sys_getcwd(buf: &mut [u8]) -> isize {
+    syscall(SYSCALL_GETCWD, [buf.as_mut_ptr() as usize, buf.len(), 0])
+}
+
+pub fn sys_lseek(fd: usize, offset: isize, whence: u32) -> isize {
+    syscall(SYSCALL_LSEEK, [fd, offset as usize, whence as usize])
 }
 
 pub fn sys_framebuffer() -> isize {

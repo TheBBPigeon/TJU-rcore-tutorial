@@ -1,6 +1,6 @@
 use super::{
     block_cache_sync_all, get_block_cache, BlockDevice, DirEntry, DiskInode, DiskInodeType,
-    EasyFileSystem, DIRENT_SZ,
+    EasyFileSystem, DIRENT_SZ, BLOCK_SZ,
 };
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -43,8 +43,10 @@ impl Inode {
     }
 
     fn find_inode_id(&self, name: &str, disk_inode: &DiskInode) -> Option<u32> {
-        // assert it is a directory
-        assert!(disk_inode.is_dir());
+        // Only directories have directory entries
+        if !disk_inode.is_dir() {
+            return None;
+        }
         let file_count = (disk_inode.size as usize) / DIRENT_SZ;
         let mut dirent = DirEntry::empty();
         for i in 0..file_count {
@@ -91,7 +93,8 @@ impl Inode {
         disk_inode.increase_size(new_size, v, &self.block_device);
     }
 
-    pub fn create(&self, name: &str) -> Option<Arc<Inode>> {
+    /// Create a new inode of the specified type (File or Directory) in this directory.
+    pub fn create_as(&self, name: &str, inode_type: DiskInodeType) -> Option<Arc<Inode>> {
         let mut fs = self.fs.lock();
         let op = |root_inode: &mut DiskInode| {
             // assert it is a directory
@@ -102,7 +105,7 @@ impl Inode {
         if self.modify_disk_inode(op).is_some() {
             return None;
         }
-        // create a new file
+        // create a new file/directory
         // alloc a inode with an indirect block
         let new_inode_id = fs.alloc_inode();
         // initialize inode
@@ -110,7 +113,7 @@ impl Inode {
         get_block_cache(new_inode_block_id as usize, Arc::clone(&self.block_device))
             .lock()
             .modify(new_inode_block_offset, |new_inode: &mut DiskInode| {
-                new_inode.initialize(DiskInodeType::File);
+                new_inode.initialize(inode_type);
             });
         self.modify_disk_inode(|root_inode| {
             // append file in the dirent
@@ -137,6 +140,105 @@ impl Inode {
             self.block_device.clone(),
         )))
         // release efs lock automatically by compiler
+    }
+
+    pub fn create(&self, name: &str) -> Option<Arc<Inode>> {
+        self.create_as(name, DiskInodeType::File)
+    }
+
+    /// Get the inode number by computing its position from the filesystem layout.
+    /// Inode 0 is the root, inode N is at position N in the inode area.
+    pub fn inode_number(&self) -> u32 {
+        let fs = self.fs.lock();
+        let inode_size = core::mem::size_of::<DiskInode>();
+        let inodes_per_block = (BLOCK_SZ / inode_size) as u32;
+        let inode_area_start_block = fs.inode_area_start_block;
+        let block_offset_in_area = self.block_id as u32 - inode_area_start_block;
+        let inode_index_in_block = self.block_offset as u32 / inode_size as u32;
+        block_offset_in_area * inodes_per_block + inode_index_in_block
+    }
+
+    /// Look up a path from this inode (which must be a directory).
+    /// The path is split by '/' and each component is resolved recursively.
+    /// Returns None if any component is not found or is not a directory
+    /// when it is not the last component.
+    ///
+    /// NOTE: ".." (parent directory) traversal is NOT YET IMPLEMENTED.
+    /// The current DirEntry struct in easy-fs does not store a parent inode
+    /// pointer, so there is no way to navigate upward from a child directory
+    /// to its parent. If the path contains "..", this function will attempt
+    /// find("..") which will fail unless a dirent literally named ".." exists.
+    /// TODO: To support "..", either (a) add a parent_inode field to DiskInode,
+    /// or (b) maintain a directory path stack in ProcessControlBlock that
+    /// tracks the full path of the CWD and resolves ".." by popping the stack.
+    pub fn lookup_path(&self, path: &str) -> Option<Arc<Inode>> {
+        // Handle empty path or root
+        if path.is_empty() || path == "/" {
+            return Some(Arc::new(Self::new(
+                self.block_id as u32,
+                self.block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+            )));
+        }
+        // Handle "."
+        if path == "." {
+            return Some(Arc::new(Self::new(
+                self.block_id as u32,
+                self.block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+            )));
+        }
+        // Strip leading '/'
+        let path = path.trim_start_matches('/');
+        if path.is_empty() {
+            return Some(Arc::new(Self::new(
+                self.block_id as u32,
+                self.block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+            )));
+        }
+
+        let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut current = self.find(components[0])?;
+
+        for (_i, component) in components.iter().enumerate().skip(1) {
+            // Before descending, verify current is a directory
+            let is_dir = current.read_disk_inode(|disk_inode| disk_inode.is_dir());
+            if !is_dir {
+                return None;
+            }
+            current = current.find(component)?;
+        }
+
+        // For the last component, if the path had a trailing '/', verify it's a directory
+        if path.ends_with('/') {
+            let is_dir = current.read_disk_inode(|disk_inode| disk_inode.is_dir());
+            if !is_dir {
+                return None;
+            }
+        }
+
+        Some(current)
+    }
+
+    /// Check if this inode is a directory.
+    pub fn is_dir(&self) -> bool {
+        self.read_disk_inode(|disk_inode| disk_inode.is_dir())
+    }
+
+    /// Check if this directory is empty (has no entries).
+    pub fn is_empty_directory(&self) -> bool {
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| {
+            if !disk_inode.is_dir() {
+                return false;
+            }
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            file_count == 0
+        })
     }
 
     pub fn ls(&self) -> Vec<String> {
@@ -182,5 +284,98 @@ impl Inode {
             }
         });
         block_cache_sync_all();
+    }
+
+    /// Remove a directory entry from this directory by name.
+    /// This only modifies the directory content; it does NOT deallocate
+    /// the target inode or its data blocks. That is done by `unlink()`.
+    /// Returns true if the entry was found and removed.
+    fn remove_directory_entry(&self, name: &str, disk_inode: &mut DiskInode) -> bool {
+        assert!(disk_inode.is_dir());
+        let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+        let mut target_index = None;
+        for i in 0..file_count {
+            let mut dirent = DirEntry::empty();
+            assert_eq!(
+                disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device),
+                DIRENT_SZ,
+            );
+            if dirent.name() == name {
+                target_index = Some(i);
+                break;
+            }
+        }
+        if target_index.is_none() {
+            return false;
+        }
+        let idx = target_index.unwrap();
+        // Shift all subsequent entries forward by DIRENT_SZ
+        for i in idx..file_count - 1 {
+            let mut next_dirent = DirEntry::empty();
+            assert_eq!(
+                disk_inode.read_at(DIRENT_SZ * (i + 1), next_dirent.as_bytes_mut(), &self.block_device),
+                DIRENT_SZ,
+            );
+            disk_inode.write_at(DIRENT_SZ * i, next_dirent.as_bytes(), &self.block_device);
+        }
+        // Clear the last entry (now duplicated or stale)
+        let empty_dirent = DirEntry::empty();
+        disk_inode.write_at(DIRENT_SZ * (file_count - 1), empty_dirent.as_bytes(), &self.block_device);
+        // Reduce directory size
+        disk_inode.size = ((file_count - 1) * DIRENT_SZ) as u32;
+        true
+    }
+
+    /// Unlink (remove) a directory entry from this directory and deallocate
+    /// the target inode and its data blocks. For files, this is equivalent to
+    /// `rm`. For directories, the directory must be empty.
+    /// Returns Some(inode_number) of the removed entry, or None if not found.
+    pub fn unlink(&self, name: &str) -> Option<u32> {
+        // Step 1: Find the target inode WITHOUT holding this directory's fs lock.
+        // `find()` acquires and releases the lock internally.
+        let target_inode = self.find(name)?;
+
+        // Step 2: Check the target's type and emptiness.
+        // The target_inode shares the same fs Mutex, so we must ensure the lock
+        // from find() is released before checking (which it is — find() returns
+        // after releasing).
+        let (target_is_dir, target_is_empty) = {
+            let _fs_guard = target_inode.fs.lock();
+            target_inode.read_disk_inode(|disk_inode| {
+                let is_dir = disk_inode.is_dir();
+                let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+                (is_dir, file_count == 0)
+            })
+        };
+        let target_inode_id = target_inode.inode_number();
+
+        // If it's a directory, it must be empty
+        if target_is_dir && !target_is_empty {
+            return None;
+        }
+
+        // Step 3: Lock this directory's fs and perform the unlink operations.
+        let mut fs = self.fs.lock();
+
+        // Clear the target inode's data blocks and deallocate them
+        target_inode.modify_disk_inode(|disk_inode| {
+            let size = disk_inode.size;
+            let data_blocks_dealloc = disk_inode.clear_size(&self.block_device);
+            assert!(data_blocks_dealloc.len() == DiskInode::total_blocks(size) as usize);
+            for data_block in data_blocks_dealloc.into_iter() {
+                fs.dealloc_data(data_block);
+            }
+        });
+
+        // Deallocate the target inode itself
+        fs.dealloc_inode(target_inode_id);
+
+        // Remove the directory entry from this directory
+        self.modify_disk_inode(|disk_inode| {
+            self.remove_directory_entry(name, disk_inode);
+        });
+
+        block_cache_sync_all();
+        Some(target_inode_id)
     }
 }

@@ -11,12 +11,24 @@ const LF: u8 = 0x0au8;
 const CR: u8 = 0x0du8;
 const DL: u8 = 0x7fu8;
 const BS: u8 = 0x08u8;
-const LINE_START: &str = ">> ";
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use user_lib::console::getchar;
-use user_lib::{OpenFlags, close, dup, exec, fork, open, pipe, waitpid};
+use user_lib::{OpenFlags, chdir, close, dup, exec, fork, getcwd, open, pipe, waitpid};
+
+fn make_prompt() -> String {
+    let mut buf = [0u8; 256];
+    let len = getcwd(&mut buf);
+    let cwd = if len > 0 {
+        core::str::from_utf8(&buf[..len as usize]).unwrap_or("/")
+    } else {
+        "/"
+    };
+    let mut prompt = String::from(cwd);
+    prompt.push_str(">> ");
+    prompt
+}
 
 #[derive(Debug)]
 struct ProcessArguments {
@@ -78,7 +90,7 @@ impl ProcessArguments {
 pub fn main() -> i32 {
     println!("Rust user shell");
     let mut line: String = String::new();
-    print!("{}", LINE_START);
+    print!("{}", make_prompt());
     loop {
         let c = getchar();
         match c {
@@ -110,6 +122,26 @@ pub fn main() -> i32 {
                     }
                     if !valid {
                         println!("Invalid command: Inputs/Outputs cannot be correctly binded!");
+                    } else if process_arguments_list.len() == 1
+                        && process_arguments_list[0]
+                            .args_copy
+                            .first()
+                            .map(|s| s.as_str() == "cd\0")
+                            .unwrap_or(false)
+                    {
+                        // Built-in: cd <path>
+                        let process_args = &process_arguments_list[0];
+                        let target = if process_args.args_copy.len() > 1 {
+                            process_args.args_copy[1].as_str()
+                        } else {
+                            "/\0"
+                        };
+                        // Remove trailing '\0' from the path
+                        let path = target.trim_end_matches('\0');
+                        let result = chdir(path);
+                        if result != 0 {
+                            println!("cd: {}: Not a directory", path.trim_end_matches('\0'));
+                        }
                     } else {
                         // create pipes
                         let mut pipes_fd: Vec<[usize; 2]> = Vec::new();
@@ -195,7 +227,7 @@ pub fn main() -> i32 {
                     }
                     line.clear();
                 }
-                print!("{}", LINE_START);
+                print!("{}", make_prompt());
             }
             BS | DL => {
                 if !line.is_empty() {

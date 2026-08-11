@@ -3,7 +3,7 @@ use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
 use super::{PidHandle, pid_alloc};
 use super::{SignalFlags, add_task};
-use crate::fs::{File, Stdin, Stdout};
+use crate::fs::{File, Stdin, Stdout, get_root_inode};
 use crate::mm::{KERNEL_SPACE, MemorySet, translated_refmut};
 use crate::sync::{Condvar, Mutex, Semaphore, UPIntrFreeCell, UPIntrRefMut};
 use crate::trap::{TrapContext, trap_handler};
@@ -11,6 +11,7 @@ use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
+use easy_fs::Inode;
 
 pub struct ProcessControlBlock {
     // immutable
@@ -26,6 +27,8 @@ pub struct ProcessControlBlockInner {
     pub children: Vec<Arc<ProcessControlBlock>>,
     pub exit_code: i32,
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
+    pub working_directory: Arc<Inode>,
+    pub working_directory_path: String,
     pub signals: SignalFlags,
     pub tasks: Vec<Option<Arc<TaskControlBlock>>>,
     pub task_res_allocator: RecycleAllocator,
@@ -47,6 +50,22 @@ impl ProcessControlBlockInner {
             self.fd_table.push(None);
             self.fd_table.len() - 1
         }
+    }
+
+    pub fn set_working_directory(&mut self, inode: Arc<Inode>) {
+        self.working_directory = inode;
+    }
+
+    pub fn get_working_directory(&self) -> Arc<Inode> {
+        self.working_directory.clone()
+    }
+
+    pub fn set_working_directory_path(&mut self, path: String) {
+        self.working_directory_path = path;
+    }
+
+    pub fn get_working_directory_path(&self) -> String {
+        self.working_directory_path.clone()
     }
 
     pub fn alloc_tid(&mut self) -> usize {
@@ -93,6 +112,8 @@ impl ProcessControlBlock {
                         // 2 -> stderr
                         Some(Arc::new(Stdout)),
                     ],
+                    working_directory: get_root_inode(),
+                    working_directory_path: String::from("/"),
                     signals: SignalFlags::empty(),
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
@@ -212,6 +233,8 @@ impl ProcessControlBlock {
                     children: Vec::new(),
                     exit_code: 0,
                     fd_table: new_fd_table,
+                    working_directory: parent.working_directory.clone(),
+                    working_directory_path: parent.working_directory_path.clone(),
                     signals: SignalFlags::empty(),
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),

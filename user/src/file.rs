@@ -28,3 +28,28 @@ pub fn read(fd: usize, buf: &mut [u8]) -> isize {
 pub fn write(fd: usize, buf: &[u8]) -> isize {
     sys_write(fd, buf)
 }
+
+// New file system operations
+pub fn mkdir(path: &str) -> isize {
+    sys_mkdir(path)
+}
+
+pub fn unlink(path: &str) -> isize {
+    sys_unlink(path)
+}
+
+pub fn chdir(path: &str) -> isize {
+    sys_chdir(path)
+}
+
+pub fn getdents(path: &str, buf: &mut [u8]) -> isize {
+    sys_getdents(path, buf)
+}
+
+pub fn getcwd(buf: &mut [u8]) -> isize {
+    sys_getcwd(buf)
+}
+
+pub fn lseek(fd: usize, offset: isize, whence: u32) -> isize {
+    sys_lseek(fd, offset, whence)
+}

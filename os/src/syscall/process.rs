@@ -1,4 +1,4 @@
-use crate::fs::{OpenFlags, open_file};
+use crate::fs::{OpenFlags, get_root_inode, open_file_at};
 use crate::mm::{translated_ref, translated_refmut, translated_str};
 use crate::task::{
     SignalFlags, current_process, current_task, current_user_token, exit_current_and_run_next,
@@ -55,7 +55,14 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
             args = args.add(1);
         }
     }
-    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+    // CWD-aware path resolution for exec
+    let process = current_process();
+    let root = if path.starts_with('/') {
+        get_root_inode()
+    } else {
+        process.inner_exclusive_access().get_working_directory()
+    };
+    if let Some(app_inode) = open_file_at(&root, path.as_str(), OpenFlags::RDONLY) {
         let all_data = app_inode.read_all();
         let process = current_process();
         let argc = args_vec.len();

@@ -10,7 +10,7 @@ pub struct EasyFileSystem {
     pub block_device: Arc<dyn BlockDevice>,
     pub inode_bitmap: Bitmap,
     pub data_bitmap: Bitmap,
-    inode_area_start_block: u32,
+    pub inode_area_start_block: u32,
     data_area_start_block: u32,
 }
 
@@ -129,6 +129,11 @@ impl EasyFileSystem {
     /// Return a block ID not ID in the data area.
     pub fn alloc_data(&mut self) -> u32 {
         self.data_bitmap.alloc(&self.block_device).unwrap() as u32 + self.data_area_start_block
+    }
+
+    /// Deallocate an inode by marking its bit as free in the inode bitmap.
+    pub fn dealloc_inode(&mut self, inode_id: u32) {
+        self.inode_bitmap.dealloc(&self.block_device, inode_id as usize);
     }
 
     pub fn dealloc_data(&mut self, block_id: u32) {

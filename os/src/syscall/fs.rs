@@ -1,6 +1,10 @@
-use crate::fs::{OpenFlags, make_pipe, open_file};
+use crate::fs::{
+    OpenFlags, make_directory_at, make_pipe, open_file_at, unlink_at, list_directory_at,
+    lookup_path_from, get_root_inode,
+};
 use crate::mm::{UserBuffer, translated_byte_buffer, translated_refmut, translated_str};
 use crate::task::{current_process, current_user_token};
+use alloc::string::String;
 use alloc::sync::Arc;
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
@@ -43,16 +47,35 @@ pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
     }
 }
 
+/// CWD-aware sys_open. If the path starts with '/', resolves from ROOT_INODE.
+/// Otherwise, resolves from the process's current working directory.
 pub fn sys_open(path: *const u8, flags: u32) -> isize {
     let process = current_process();
     let token = current_user_token();
     let path = translated_str(token, path);
-    if let Some(inode) = open_file(path.as_str(), OpenFlags::from_bits(flags).unwrap()) {
+    println!("[sys_open] path='{}', flags={}", path, flags);
+    let flags = OpenFlags::from_bits(flags).unwrap();
+    // Determine root: absolute path -> ROOT_INODE, relative -> CWD
+    let root = if path.starts_with('/') {
+        println!("[sys_open] absolute path, using ROOT_INODE");
+        get_root_inode()
+    } else {
+        let inner = process.inner_exclusive_access();
+        let working_directory = inner.get_working_directory();
+        println!(
+            "[sys_open] relative path, using CWD inode_id={}",
+            working_directory.inode_number()
+        );
+        working_directory
+    };
+    if let Some(inode) = open_file_at(&root, path.as_str(), flags) {
         let mut inner = process.inner_exclusive_access();
         let fd = inner.alloc_fd();
         inner.fd_table[fd] = Some(inode);
+        println!("[sys_open] SUCCESS: path='{}', fd={}", path, fd);
         fd as isize
     } else {
+        println!("[sys_open] FAILED: path='{}'", path);
         -1
     }
 }
@@ -96,4 +119,187 @@ pub fn sys_dup(fd: usize) -> isize {
     let new_fd = inner.alloc_fd();
     inner.fd_table[new_fd] = Some(Arc::clone(inner.fd_table[fd].as_ref().unwrap()));
     new_fd as isize
+}
+
+/// Create a directory at the given path. CWD-aware.
+pub fn sys_mkdir(path: *const u8) -> isize {
+    let token = current_user_token();
+    let path = translated_str(token, path);
+    println!("[sys_mkdir] path='{}'", path);
+    let process = current_process();
+    let root = if path.starts_with('/') {
+        get_root_inode()
+    } else {
+        let inner = process.inner_exclusive_access();
+        inner.get_working_directory()
+    };
+    make_directory_at(&root, path.as_str())
+}
+
+/// Remove a file or empty directory at the given path. CWD-aware.
+pub fn sys_unlink(path: *const u8) -> isize {
+    let token = current_user_token();
+    let path = translated_str(token, path);
+    println!("[sys_unlink] path='{}'", path);
+    let process = current_process();
+    let root = if path.starts_with('/') {
+        get_root_inode()
+    } else {
+        let inner = process.inner_exclusive_access();
+        inner.get_working_directory()
+    };
+    unlink_at(&root, path.as_str())
+}
+
+/// Change the current working directory.
+/// NOTE: "cd .." is NOT YET IMPLEMENTED for the same reason as above —
+/// the filesystem does not track parent directory pointers.
+/// TODO: Future implementation will either add parent tracking to
+/// DiskInode or maintain a path stack in the process PCB.
+pub fn sys_chdir(path: *const u8) -> isize {
+    let token = current_user_token();
+    let path = translated_str(token, path);
+    let process = current_process();
+
+    // Extract all needed data from the process BEFORE the filesystem lookup,
+    // to avoid holding the process lock during filesystem operations.
+    let (old_inode_id, old_path, root) = {
+        let inner = process.inner_exclusive_access();
+        let old_id = inner.get_working_directory().inode_number();
+        let old_p = inner.get_working_directory_path();
+        let root_inode = if path.starts_with('/') {
+            get_root_inode()
+        } else {
+            inner.get_working_directory()
+        };
+        (old_id, old_p, root_inode)
+    }; // inner dropped here — process lock released
+
+    println!(
+        "[sys_chdir] path='{}', old_cwd_inode_id={}",
+        path, old_inode_id
+    );
+    match lookup_path_from(&root, path.as_str()) {
+        Some(new_inode) => {
+            // Verify the target is a directory
+            if !new_inode.is_dir() {
+                println!("[sys_chdir] FAILED: path='{}' is not a directory", path);
+                return -1;
+            }
+            let new_id = new_inode.inode_number();
+            // Compute the new path string
+            let new_path = if path.starts_with('/') {
+                if path == "/" {
+                    String::from("/")
+                } else {
+                    String::from(path.trim_end_matches('/'))
+                }
+            } else if old_path == "/" {
+                String::from("/") + &path
+            } else {
+                old_path + "/" + &path
+            };
+            // Re-acquire process lock to update CWD
+            let mut inner = process.inner_exclusive_access();
+            inner.set_working_directory(new_inode);
+            inner.set_working_directory_path(new_path.clone());
+            println!(
+                "[sys_chdir] SUCCESS: path='{}', old_inode_id={}, new_inode_id={}, new_path='{}'",
+                path, old_inode_id, new_id, new_path
+            );
+            0
+        }
+        None => {
+            println!("[sys_chdir] FAILED: path='{}' not found", path);
+            -1
+        }
+    }
+}
+
+/// Get the current working directory path.
+pub fn sys_getcwd(buf: *mut u8, len: usize) -> isize {
+    let token = current_user_token();
+    let process = current_process();
+    let inner = process.inner_exclusive_access();
+    let cwd_path = inner.get_working_directory_path();
+    drop(inner);
+    let path_bytes = cwd_path.as_bytes();
+    let write_len = core::cmp::min(path_bytes.len(), len);
+    let mut buffers = translated_byte_buffer(token, buf, write_len);
+    let mut offset = 0;
+    for slice in buffers.iter_mut() {
+        let end = core::cmp::min(offset + slice.len(), write_len);
+        slice[..end - offset].copy_from_slice(&path_bytes[offset..end]);
+        offset = end;
+    }
+    println!("[sys_getcwd] cwd='{}', written={}", cwd_path, write_len);
+    write_len as isize
+}
+
+/// Get directory entries at a given path. CWD-aware.
+/// The path is passed as a user-space string via the first arg.
+/// Writes newline-separated file names into the user buffer.
+/// Returns number of bytes written, or -1 on error.
+pub fn sys_getdents(path: *const u8, buf: *mut u8, len: usize) -> isize {
+    let token = current_user_token();
+    let path_str = translated_str(token, path);
+    println!("[sys_getdents] path='{}', buf_len={}", path_str, len);
+    let process = current_process();
+    let root = if path_str.starts_with('/') {
+        get_root_inode()
+    } else {
+        let inner = process.inner_exclusive_access();
+        inner.get_working_directory()
+    };
+    let entries = match list_directory_at(&root, path_str.as_str()) {
+        Some(e) => e,
+        None => {
+            println!("[sys_getdents] FAILED: path='{}'", path_str);
+            return -1;
+        }
+    };
+    println!("[sys_getdents] path='{}', entry_count={}", path_str, entries.len());
+
+    // Build the listing as a single string in kernel space
+    let mut listing = alloc::string::String::new();
+    for name in &entries {
+        listing.push_str(name);
+        listing.push('\n');
+    }
+    let bytes = listing.as_bytes();
+    let write_len = core::cmp::min(bytes.len(), len);
+
+    // Copy to user buffer using translated slices
+    let mut buffers = translated_byte_buffer(token, buf, write_len);
+    let mut offset = 0;
+    for slice in buffers.iter_mut() {
+        let end = core::cmp::min(offset + slice.len(), write_len);
+        let copy_len = end - offset;
+        slice[..copy_len].copy_from_slice(&bytes[offset..end]);
+        offset = end;
+        if offset >= write_len {
+            break;
+        }
+    }
+    write_len as isize
+}
+
+/// Move the file offset for a given fd.
+/// whence: 0 = SEEK_SET, 1 = SEEK_CUR, 2 = SEEK_END
+pub fn sys_lseek(fd: usize, offset: isize, whence: u32) -> isize {
+    println!("[sys_lseek] fd={}, offset={}, whence={}", fd, offset, whence);
+    let process = current_process();
+    let inner = process.inner_exclusive_access();
+    if fd >= inner.fd_table.len() {
+        return -1;
+    }
+    if let Some(file) = &inner.fd_table[fd] {
+        let _file = file.clone();
+        drop(inner);
+        // Lseek requires accessing OSInode's offset field
+        // For now, return -1 as this needs integration with OSInode
+        -1
+    } else {
+        -1
+    }
 }

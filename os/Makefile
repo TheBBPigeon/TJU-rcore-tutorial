@@ -74,10 +74,10 @@ disasm-vim: kernel
 run: run-inner
 
 QEMU_ARGS := -machine virt \
-			 -bios $(BOOTLOADER) \
+			 -bios default \
+			 -kernel $(KERNEL_ELF) \
 			 -serial stdio \
 			 $(GUI_OPTION) \
-			 -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) \
 			 -drive file=$(FS_IMG),if=none,format=raw,id=x0 \
 			 -device virtio-blk-device,drive=x0 \
 			 -device virtio-gpu-device \
