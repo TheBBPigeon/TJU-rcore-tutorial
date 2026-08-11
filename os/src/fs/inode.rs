@@ -180,8 +180,16 @@ pub fn unlink_at(root: &Arc<Inode>, path: &str) -> isize {
 /// Rename/move a file or directory. Handles both same-directory rename
 /// and cross-directory move. Returns 0 on success, -1 on failure.
 pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
-    let (old_parent_path, old_name) = split_path(old_path);
-    let (new_parent_path, new_name) = split_path(new_path);
+    let (old_parent_path, mut old_name) = split_path(old_path);
+    let (new_parent_path, mut new_name) = split_path(new_path);
+
+    // If target ends with '/', use the source name (mv a dir/ -> mv a dir/a)
+    if new_name.is_empty() && !old_name.is_empty() {
+        new_name = old_name;
+    }
+    if old_name.is_empty() || new_name.is_empty() {
+        return -1;
+    }
 
     let old_parent = if old_parent_path.is_empty() || old_parent_path == "/" {
         root.clone()
