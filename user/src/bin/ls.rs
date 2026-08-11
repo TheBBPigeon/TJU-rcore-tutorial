@@ -17,7 +17,9 @@ pub fn main(argc: usize, argv: &[&str]) -> i32 {
         return -1;
     }
     let len = result as usize;
-    if len > 0 {
+    if len == 0 {
+        println!("(empty)");
+    } else {
         let listing = core::str::from_utf8(&buf[..len]).unwrap_or("");
         print!("{}", listing);
     }
