@@ -3,6 +3,7 @@ mod id;
 mod manager;
 mod process;
 mod processor;
+mod scheduler;
 mod signal;
 mod switch;
 #[allow(clippy::module_inception)]
@@ -19,13 +20,19 @@ use switch::__switch;
 
 pub use context::TaskContext;
 pub use id::{IDLE_PID, KernelStack, PidHandle, kstack_alloc, pid_alloc};
-pub use manager::{add_task, pid2process, remove_from_pid2process, wakeup_task};
+#[allow(unused_imports)]
+pub use manager::{
+    add_task, pid2process, ready_task_count, remove_from_pid2process, scheduler_name, wakeup_task,
+};
 pub use processor::{
     current_kstack_top, current_process, current_task, current_trap_cx, current_trap_cx_user_va,
     current_user_token, run_tasks, schedule, take_current_task,
 };
+#[allow(unused_imports)]
+pub use scheduler::{MAX_PRIORITY, MIN_PRIORITY, SchedulerPolicy};
 pub use signal::SignalFlags;
-pub use task::{TaskControlBlock, TaskStatus};
+#[allow(unused_imports)]
+pub use task::{SchedInfo, TaskControlBlock, TaskStatus};
 
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
@@ -50,7 +57,19 @@ pub fn block_current_task() -> *mut TaskContext {
     let task = take_current_task().unwrap();
     let mut task_inner = task.inner_exclusive_access();
     task_inner.task_status = TaskStatus::Blocked;
+    task_inner.sched_info.on_block();
     &mut task_inner.task_cx as *mut TaskContext
+}
+
+/// Account one user-mode timer tick and report whether the current task should
+/// be preempted according to the active scheduling policy.
+pub fn on_current_task_timer_tick() -> bool {
+    let Some(task) = current_task() else {
+        return false;
+    };
+    task.inner
+        .exclusive_session(|inner| inner.sched_info.on_timer_tick());
+    manager::should_preempt(&task)
 }
 
 pub fn block_current_and_run_next() {
@@ -67,6 +86,7 @@ pub fn exit_current_and_run_next(exit_code: i32) {
     // record exit code
     task_inner.exit_code = Some(exit_code);
     task_inner.res = None;
+    task_inner.sched_info.on_block();
     // here we do not remove the thread since we are still using the kstack
     // it will be deallocated when sys_waittid is called
     drop(task_inner);

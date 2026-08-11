@@ -1,25 +1,46 @@
+use super::scheduler::{DEFAULT_SCHEDULER_POLICY, Scheduler, build_scheduler};
 use super::{ProcessControlBlock, TaskControlBlock, TaskStatus};
 use crate::sync::UPIntrFreeCell;
-use alloc::collections::{BTreeMap, VecDeque};
+use crate::timer::get_time_ticks;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use lazy_static::*;
 
 pub struct TaskManager {
-    ready_queue: VecDeque<Arc<TaskControlBlock>>,
+    scheduler: alloc::boxed::Box<dyn Scheduler>,
 }
 
-/// A simple FIFO scheduler.
 impl TaskManager {
     pub fn new() -> Self {
         Self {
-            ready_queue: VecDeque::new(),
+            scheduler: build_scheduler(DEFAULT_SCHEDULER_POLICY),
         }
     }
     pub fn add(&mut self, task: Arc<TaskControlBlock>) {
-        self.ready_queue.push_back(task);
+        let now = get_time_ticks();
+        let should_enqueue = task.inner.exclusive_session(|inner| {
+            debug_assert_eq!(inner.task_status, TaskStatus::Ready);
+            inner.sched_info.on_enqueue(now)
+        });
+        if should_enqueue {
+            self.scheduler.enqueue(task);
+        }
     }
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        let now = get_time_ticks();
+        let task = self.scheduler.dequeue(now)?;
+        task.inner
+            .exclusive_session(|inner| inner.sched_info.on_dispatch(now));
+        Some(task)
+    }
+    pub fn should_preempt(&mut self, current: &Arc<TaskControlBlock>) -> bool {
+        self.scheduler.should_preempt(current, get_time_ticks())
+    }
+    pub fn scheduler_name(&self) -> &'static str {
+        self.scheduler.name()
+    }
+    pub fn ready_len(&self) -> usize {
+        self.scheduler.ready_len()
     }
 }
 
@@ -43,6 +64,18 @@ pub fn wakeup_task(task: Arc<TaskControlBlock>) {
 
 pub fn fetch_task() -> Option<Arc<TaskControlBlock>> {
     TASK_MANAGER.exclusive_access().fetch()
+}
+
+pub fn should_preempt(current: &Arc<TaskControlBlock>) -> bool {
+    TASK_MANAGER.exclusive_access().should_preempt(current)
+}
+
+pub fn scheduler_name() -> &'static str {
+    TASK_MANAGER.exclusive_access().scheduler_name()
+}
+
+pub fn ready_task_count() -> usize {
+    TASK_MANAGER.exclusive_access().ready_len()
 }
 
 pub fn pid2process(pid: usize) -> Option<Arc<ProcessControlBlock>> {
