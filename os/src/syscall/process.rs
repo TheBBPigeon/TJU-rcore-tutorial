@@ -1,3 +1,4 @@
+use crate::DEV_NON_BLOCKING_ACCESS;
 use crate::fs::{OpenFlags, open_file};
 use crate::mm::{translated_ref, translated_refmut, translated_str};
 use crate::task::{
@@ -55,8 +56,14 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
             args = args.add(1);
         }
     }
-    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
-        let all_data = app_inode.read_all();
+    // Load the ELF with synchronous block reads. The easy-fs layer holds
+    // spin locks across blocking I/O, so an asynchronous read here can
+    // deadlock when two pipeline children call exec concurrently.
+    *DEV_NON_BLOCKING_ACCESS.exclusive_access() = false;
+    let app_inode = open_file(path.as_str(), OpenFlags::RDONLY);
+    let all_data = app_inode.as_ref().map(|inode| inode.read_all());
+    *DEV_NON_BLOCKING_ACCESS.exclusive_access() = true;
+    if let Some(all_data) = all_data {
         let process = current_process();
         let argc = args_vec.len();
         process.exec(all_data.as_slice(), args_vec);

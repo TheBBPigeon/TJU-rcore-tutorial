@@ -126,6 +126,17 @@ UART 硬件 --> 串口驱动(IRQ→环形缓冲+Condvar) --> TTY 行规程(raw/c
 | M4 | 作业控制：jobs/fg/bg、回收、Ctrl-C 前台终止 | 验收脚本通过 |
 | M5 | 与成员1/3 联调、文档、PR 合入 `course-dev` | 小组演示通过 |
 
+## 6.1 实现状态（2026-08-11）
+
+- 已完成：M0 分支与基线、M1 内核 TTY、M2 进程组/信号、M3 Shell 重构、M4 作业控制。
+- 已验证（QEMU 实测）：行编辑、历史、内建命令、管道（含 `echo | cmd`）、重定向、
+  后台任务、jobs/fg、Ctrl-C 终止前台任务、tty_test/pgid_test/sigint_test。
+- 未实现（后续增强）：SIGTSTP/SIGCONT 停止恢复、`>>`、`2>`、`&&`/`||`、
+  历史持久化、Tab 补全；`cd/pwd` 目前为 Shell 侧字符串维护，待成员3的
+  `chdir/getcwd` 合入后对接。
+- 环境修复：bootloader 升级为 RustSBI 0.3.1（QEMU 11 需要）；exec 加载 ELF
+  期间使用同步磁盘读，避免 easy-fs spinlock 跨阻塞 I/O 导致的管道并发死锁。
+
 ## 7. 测试与验收
 
 - 内核测试程序：`tty_test`（canonical/raw/EOF）、`pgid_test`、`sigint_test`。

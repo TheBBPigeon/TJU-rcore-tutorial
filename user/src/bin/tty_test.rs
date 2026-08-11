@@ -14,6 +14,7 @@ pub fn main() -> i32 {
     println!("[tty_test] initial flags = {:#x}", flags);
 
     // canonical mode: type a line and press Enter
+    tty_ctl(0, TTY_CTL_SET_FLAGS, TTY_ECHO | TTY_ICANON | TTY_ISIG);
     println!("[tty_test] canonical: please type a line and press Enter");
     let mut buf = [0u8; 64];
     let n = read(0, &mut buf) as usize;

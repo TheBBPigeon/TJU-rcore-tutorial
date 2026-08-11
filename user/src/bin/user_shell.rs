@@ -195,10 +195,10 @@ impl LineEditor {
                     return Some(line);
                 }
                 BS | DEL => self.backspace(),
-                0x01 => self.home(),          // Ctrl-A
-                0x05 => self.end(),           // Ctrl-E
-                0x15 => self.kill_line(),     // Ctrl-U
-                0x0b => self.kill_to_end(),   // Ctrl-K
+                0x01 => self.home(),        // Ctrl-A
+                0x05 => self.end(),         // Ctrl-E
+                0x15 => self.kill_line(),   // Ctrl-U
+                0x0b => self.kill_to_end(), // Ctrl-K
                 0x04 => {
                     if self.buf.is_empty() {
                         write(1, b"\r\n");
@@ -255,6 +255,12 @@ fn tokenize(input: &str) -> Result<Vec<String>, &'static str> {
         }
         match c {
             '\'' | '"' => quote = Some(c),
+            ';' | '|' | '&' | '<' | '>' => {
+                if !cur.is_empty() {
+                    tokens.push(mem::take(&mut cur));
+                }
+                tokens.push(c.to_string());
+            }
             c if c.is_whitespace() => {
                 if !cur.is_empty() {
                     tokens.push(mem::take(&mut cur));
@@ -326,12 +332,11 @@ fn parse_command(input: &str) -> Result<Vec<Command>, &'static str> {
         }
         i += 1;
     }
-    finish_stage(&mut stages, &mut stage)?;
+    if !stage.prog.is_empty() || !stages.is_empty() {
+        finish_stage(&mut stages, &mut stage)?;
+    }
     if !stages.is_empty() {
-        commands.push(Command {
-            stages,
-            background,
-        });
+        commands.push(Command { stages, background });
     }
     Ok(commands)
 }
@@ -427,7 +432,8 @@ impl Shell {
         for (jid, code, cmdline) in done {
             println!("[{}]+ Done ({}) {}", jid, code, cmdline);
         }
-        self.jobs.retain(|j| !matches!(j.status, JobStatus::Done(_)));
+        self.jobs
+            .retain(|j| !matches!(j.status, JobStatus::Done(_)));
     }
 
     fn register_job(&mut self, pgid: usize, pids: Vec<usize>, cmdline: &str, background: bool) {
@@ -503,6 +509,11 @@ impl Shell {
                     close(pipe_fd[0]);
                     close(pipe_fd[1]);
                 }
+                // builtins can appear as pipeline stages (e.g. echo hi | wc)
+                if self.is_pipeline_builtin(&stage.prog) {
+                    self.run_pipeline_builtin(stage);
+                    user_lib::exit(0);
+                }
                 // exec
                 let path = nul(&resolve_prog(&self.cwd, &stage.prog));
                 let mut args_nul: Vec<String> = Vec::new();
@@ -513,7 +524,6 @@ impl Shell {
                 let mut args_addr: Vec<*const u8> = args_nul.iter().map(|s| s.as_ptr()).collect();
                 args_addr.push(core::ptr::null());
                 if exec(path.as_str(), args_addr.as_slice()) == -1 {
-                    println!("shell: command not found: {}", stage.prog);
                     user_lib::exit(127);
                 }
                 unreachable!();
@@ -543,6 +553,21 @@ impl Shell {
         tcsetpgrp(0, self.shell_pgrp);
         if last_code != 0 {
             println!("[shell] process exited with code {}", last_code);
+        }
+    }
+
+    fn is_pipeline_builtin(&self, prog: &str) -> bool {
+        matches!(prog, "echo" | "pwd" | "history" | "help" | "clear")
+    }
+
+    fn run_pipeline_builtin(&self, stage: &Stage) {
+        match stage.prog.as_str() {
+            "echo" => self.builtin_echo(&stage.args, &stage.output),
+            "pwd" => self.builtin_pwd(),
+            "history" => self.builtin_history(),
+            "help" => self.builtin_help(),
+            "clear" => self.builtin_clear(),
+            _ => {}
         }
     }
 
@@ -746,6 +771,9 @@ pub fn main() -> i32 {
     let mut shell = Shell::new(shell_pgrp);
     let mut editor = LineEditor::new();
     loop {
+        // child programs may change TTY flags (e.g. tty_test); always restore
+        // the shell's raw editing mode before reading the next command
+        tty_ctl(0, TTY_CTL_SET_FLAGS, TTY_ISIG);
         shell.reap_jobs();
         let line = match editor.readline() {
             Some(line) => line,
