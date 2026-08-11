@@ -98,10 +98,6 @@ fn split_path(path: &str) -> (&str, &str) {
 }
 
 /// Look up a path starting from a given root inode.
-/// NOTE: ".." (parent directory) traversal is NOT YET IMPLEMENTED.
-/// Path components equal to ".." are treated as literal directory entry
-/// names and will fail to resolve. See the corresponding NOTE in
-/// easy-fs/src/vfs.rs for the rationale and planned TODO approach.
 pub fn lookup_path_from(root: &Arc<Inode>, path: &str) -> Option<Arc<Inode>> {
     root.lookup_path(path)
 }

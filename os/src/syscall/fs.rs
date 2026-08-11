@@ -135,10 +135,6 @@ pub fn sys_unlink(path: *const u8) -> isize {
 }
 
 /// Change the current working directory.
-/// NOTE: "cd .." is NOT YET IMPLEMENTED for the same reason as above —
-/// the filesystem does not track parent directory pointers.
-/// TODO: Future implementation will either add parent tracking to
-/// DiskInode or maintain a path stack in the process PCB.
 pub fn sys_chdir(path: *const u8) -> isize {
     let token = current_user_token();
     let path = translated_str(token, path);
@@ -161,7 +157,6 @@ pub fn sys_chdir(path: *const u8) -> isize {
                 return -1;
             }
             let new_path = if path.starts_with('/') {
-                // Absolute path: normalize multiple slashes
                 let trimmed = path.trim_matches('/');
                 if trimmed.is_empty() {
                     String::from("/")
@@ -169,8 +164,17 @@ pub fn sys_chdir(path: *const u8) -> isize {
                     String::from("/") + trimmed
                 }
             } else if path == "." {
-                // cd . stays in the same directory
                 old_path.clone()
+            } else if path == ".." {
+                if old_path == "/" {
+                    String::from("/")
+                } else {
+                    match old_path.rfind('/') {
+                        Some(pos) if pos == 0 => String::from("/"),
+                        Some(pos) => String::from(&old_path[..pos]),
+                        None => String::from("/"),
+                    }
+                }
             } else if old_path == "/" {
                 String::from("/") + &path
             } else {

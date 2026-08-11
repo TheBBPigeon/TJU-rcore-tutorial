@@ -95,6 +95,9 @@ impl Inode {
 
     /// Create a new inode of the specified type (File or Directory) in this directory.
     pub fn create_as(&self, name: &str, inode_type: DiskInodeType) -> Option<Arc<Inode>> {
+        // Compute parent inode number BEFORE acquiring the fs lock,
+        // since inode_number() internally acquires self.fs.lock().
+        let parent_inode_number = self.inode_number();
         let mut fs = self.fs.lock();
         let op = |root_inode: &mut DiskInode| {
             // assert it is a directory
@@ -114,6 +117,7 @@ impl Inode {
             .lock()
             .modify(new_inode_block_offset, |new_inode: &mut DiskInode| {
                 new_inode.initialize(inode_type);
+                new_inode.parent_inode = parent_inode_number;
             });
         self.modify_disk_inode(|root_inode| {
             // append file in the dirent
@@ -162,15 +166,6 @@ impl Inode {
     /// The path is split by '/' and each component is resolved recursively.
     /// Returns None if any component is not found or is not a directory
     /// when it is not the last component.
-    ///
-    /// NOTE: ".." (parent directory) traversal is NOT YET IMPLEMENTED.
-    /// The current DirEntry struct in easy-fs does not store a parent inode
-    /// pointer, so there is no way to navigate upward from a child directory
-    /// to its parent. If the path contains "..", this function will attempt
-    /// find("..") which will fail unless a dirent literally named ".." exists.
-    /// TODO: To support "..", either (a) add a parent_inode field to DiskInode,
-    /// or (b) maintain a directory path stack in ProcessControlBlock that
-    /// tracks the full path of the CWD and resolves ".." by popping the stack.
     pub fn lookup_path(&self, path: &str) -> Option<Arc<Inode>> {
         // Handle empty path or root
         if path.is_empty() || path == "/" {
@@ -202,15 +197,17 @@ impl Inode {
         }
 
         let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let mut current = self.find(components[0])?;
+        // Resolve the first component (may be "..").
+        // We work on a clone of self since the first ".." goes to our parent.
+        let mut current = self.resolve_component(components[0])?;
 
-        for (_i, component) in components.iter().enumerate().skip(1) {
+        for component in components.iter().skip(1) {
             // Before descending, verify current is a directory
             let is_dir = current.read_disk_inode(|disk_inode| disk_inode.is_dir());
             if !is_dir {
                 return None;
             }
-            current = current.find(component)?;
+            current = current.resolve_component(component)?;
         }
 
         // For the last component, if the path had a trailing '/', verify it's a directory
@@ -222,6 +219,40 @@ impl Inode {
         }
 
         Some(current)
+    }
+
+    /// Resolve a single path component relative to this inode.
+    /// Handles ".", "..", and named entries.
+    fn resolve_component(&self, component: &str) -> Option<Arc<Inode>> {
+        if component == "." {
+            return Some(Arc::new(Self::new(
+                self.block_id as u32,
+                self.block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+            )));
+        }
+        if component == ".." {
+            let parent_id = self.read_disk_inode(|disk_inode| disk_inode.parent_inode);
+            if parent_id == 0 {
+                // Already at root, or root has no parent
+                return Some(Arc::new(Self::new(
+                    self.block_id as u32,
+                    self.block_offset,
+                    self.fs.clone(),
+                    self.block_device.clone(),
+                )));
+            }
+            let fs = self.fs.lock();
+            let (block_id, block_offset) = fs.get_disk_inode_pos(parent_id);
+            return Some(Arc::new(Self::new(
+                block_id,
+                block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+            )));
+        }
+        self.find(component)
     }
 
     /// Check if this inode is a directory.

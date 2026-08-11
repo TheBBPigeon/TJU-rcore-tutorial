@@ -73,6 +73,7 @@ impl EasyFileSystem {
             .lock()
             .modify(root_inode_offset, |disk_inode: &mut DiskInode| {
                 disk_inode.initialize(DiskInodeType::Directory);
+                disk_inode.parent_inode = 0;
             });
         block_cache_sync_all();
         Arc::new(Mutex::new(efs))
