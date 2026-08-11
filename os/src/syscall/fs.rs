@@ -273,6 +273,9 @@ pub fn sys_getdents(path: *const u8, buf: *mut u8, len: usize) -> isize {
     let entries = dir.ls();
 
     let mut listing = alloc::string::String::new();
+    listing.push_str("total ");
+    listing.push_str(&alloc::string::ToString::to_string(&entries.len()));
+    listing.push('\n');
     for name in &entries {
         let entry_type = if let Some(inode) = dir.find(name) {
             if inode.is_dir() { "d " } else { "f " }
