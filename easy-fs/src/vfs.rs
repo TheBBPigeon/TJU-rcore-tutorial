@@ -361,6 +361,43 @@ impl Inode {
         true
     }
 
+    /// Rename a directory entry within the same directory.
+    /// Returns true on success, false if old_name doesn't exist or new_name already exists.
+    pub fn rename(&self, old_name: &str, new_name: &str) -> bool {
+        if old_name == "." || old_name == ".." || new_name == "." || new_name == ".." {
+            return false;
+        }
+        let mut fs = self.fs.lock();
+        // Find old entry inode
+        let old_inode_id = match self.read_disk_inode(|disk_inode| {
+            self.find_inode_id(old_name, disk_inode)
+        }) {
+            Some(id) => id,
+            None => return false,
+        };
+        // Check new_name doesn't exist
+        let new_exists = self.read_disk_inode(|disk_inode| {
+            self.find_inode_id(new_name, disk_inode).is_some()
+        });
+        if new_exists {
+            return false;
+        }
+        // Add new dirent
+        self.modify_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            self.increase_size(new_size as u32, disk_inode, &mut fs);
+            let dirent = DirEntry::new(new_name, old_inode_id);
+            disk_inode.write_at(file_count * DIRENT_SZ, dirent.as_bytes(), &self.block_device);
+        });
+        // Remove old dirent
+        self.modify_disk_inode(|disk_inode| {
+            self.remove_directory_entry(old_name, disk_inode);
+        });
+        block_cache_sync_all();
+        true
+    }
+
     /// Unlink (remove) a directory entry from this directory and deallocate
     /// the target inode and its data blocks. For files, this is equivalent to
     /// `rm`. For directories, the directory must be empty.

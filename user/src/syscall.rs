@@ -24,6 +24,7 @@ const SYSCALL_GETCWD: usize = 79;
 const SYSCALL_LSEEK: usize = 62;
 const SYSCALL_GETPATH: usize = 80;
 const SYSCALL_SETPATH: usize = 81;
+const SYSCALL_RENAME: usize = 82;
 const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
@@ -235,6 +236,12 @@ pub fn sys_getpath(buf: &mut [u8]) -> isize {
 pub fn sys_setpath(path: &str) -> isize {
     let path_buf = null_terminated_path(path);
     syscall(SYSCALL_SETPATH, [path_buf.as_ptr() as usize, 0, 0])
+}
+
+pub fn sys_rename(old_path: &str, new_path: &str) -> isize {
+    let old_buf = null_terminated_path(old_path);
+    let new_buf = null_terminated_path(new_path);
+    syscall(SYSCALL_RENAME, [old_buf.as_ptr() as usize, new_buf.as_ptr() as usize, 0])
 }
 
 pub fn sys_lseek(fd: usize, offset: isize, whence: u32) -> isize {

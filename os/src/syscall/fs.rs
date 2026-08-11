@@ -1,6 +1,6 @@
 use crate::fs::{
-    OpenFlags, make_directory_at, make_pipe, open_file_at, unlink_at, list_directory_at,
-    lookup_path_from, get_root_inode,
+    OpenFlags, make_directory_at, make_pipe, open_file_at, rename_at, unlink_at,
+    list_directory_at, lookup_path_from, get_root_inode,
 };
 use crate::mm::{UserBuffer, translated_byte_buffer, translated_refmut, translated_str};
 use crate::task::{current_process, current_user_token};
@@ -132,6 +132,21 @@ pub fn sys_unlink(path: *const u8) -> isize {
         process.inner_exclusive_access().get_working_directory()
     };
     unlink_at(&root, path.as_str())
+}
+
+/// Rename a file or directory. CWD-aware. Both paths must be in the same
+/// parent directory (same-directory rename only).
+pub fn sys_rename(old_path: *const u8, new_path: *const u8) -> isize {
+    let token = current_user_token();
+    let old_path = translated_str(token, old_path);
+    let new_path = translated_str(token, new_path);
+    let process = current_process();
+    let root = if old_path.starts_with('/') {
+        get_root_inode()
+    } else {
+        process.inner_exclusive_access().get_working_directory()
+    };
+    rename_at(&root, old_path.as_str(), new_path.as_str())
 }
 
 /// Change the current working directory.

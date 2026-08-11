@@ -177,6 +177,26 @@ pub fn unlink_at(root: &Arc<Inode>, path: &str) -> isize {
     }
 }
 
+/// Rename a file or directory within the same parent directory.
+/// Returns 0 on success, -1 on failure.
+pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
+    let (old_parent_path, old_name) = split_path(old_path);
+    let (new_parent_path, new_name) = split_path(new_path);
+    // Both must be in the same directory
+    if old_parent_path != new_parent_path {
+        return -1;
+    }
+    let parent = if old_parent_path.is_empty() || old_parent_path == "/" {
+        root.clone()
+    } else {
+        match lookup_path_from(root, old_parent_path) {
+            Some(p) => p,
+            None => return -1,
+        }
+    };
+    if parent.rename(old_name, new_name) { 0 } else { -1 }
+}
+
 /// List the contents of a directory at a given path relative to a root inode.
 pub fn list_directory_at(root: &Arc<Inode>, path: &str) -> Option<Vec<String>> {
     let dir = if path.is_empty() || path == "/" {

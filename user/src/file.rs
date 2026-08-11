@@ -38,6 +38,10 @@ pub fn unlink(path: &str) -> isize {
     sys_unlink(path)
 }
 
+pub fn rename(old_path: &str, new_path: &str) -> isize {
+    sys_rename(old_path, new_path)
+}
+
 pub fn chdir(path: &str) -> isize {
     sys_chdir(path)
 }
