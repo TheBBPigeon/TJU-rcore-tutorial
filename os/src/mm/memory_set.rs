@@ -329,6 +329,33 @@ impl MemorySet {
         unsafe { asm!("sfence.vma") };
         true
     }
+    pub fn ensure_private_range(&mut self, start_va: VirtAddr, len: usize) -> bool {
+        if len == 0 {
+            return true;
+        }
+        let start: usize = start_va.into();
+        let end = match start.checked_add(len) {
+            Some(end) => end,
+            None => return false,
+        };
+        let mut vpn = start_va.floor();
+        let end_vpn = VirtAddr::from(end).ceil();
+        while vpn < end_vpn {
+            let pte = match self.page_table.translate(vpn) {
+                Some(pte) if pte.is_valid() && pte.user_accessible() => pte,
+                _ => return false,
+            };
+            if pte.is_cow() {
+                if !self.handle_cow_fault(VirtAddr::from(vpn)) {
+                    return false;
+                }
+            } else if !pte.writable() {
+                return false;
+            }
+            vpn.step();
+        }
+        true
+    }
     pub fn activate(&self) {
         let satp = self.page_table.token();
         unsafe {

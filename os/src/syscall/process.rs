@@ -88,6 +88,12 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
         // ++++ release child PCB
     });
     if let Some((idx, _)) = pair {
+        if !inner
+            .memory_set
+            .ensure_private_range((exit_code_ptr as usize).into(), core::mem::size_of::<i32>())
+        {
+            return -1;
+        }
         let child = inner.children.remove(idx);
         // confirm that child will be deallocated after being removed from children list
         assert_eq!(Arc::strong_count(&child), 1);

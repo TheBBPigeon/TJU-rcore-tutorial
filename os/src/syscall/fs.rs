@@ -24,9 +24,8 @@ pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
 }
 
 pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
-    let token = current_user_token();
     let process = current_process();
-    let inner = process.inner_exclusive_access();
+    let mut inner = process.inner_exclusive_access();
     if fd >= inner.fd_table.len() {
         return -1;
     }
@@ -35,6 +34,13 @@ pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
         if !file.readable() {
             return -1;
         }
+        if !inner
+            .memory_set
+            .ensure_private_range((buf as usize).into(), len)
+        {
+            return -1;
+        }
+        let token = inner.memory_set.token();
         // release current task TCB manually to avoid multi-borrow
         drop(inner);
         file.read(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize
@@ -72,8 +78,14 @@ pub fn sys_close(fd: usize) -> isize {
 
 pub fn sys_pipe(pipe: *mut usize) -> isize {
     let process = current_process();
-    let token = current_user_token();
     let mut inner = process.inner_exclusive_access();
+    if !inner
+        .memory_set
+        .ensure_private_range((pipe as usize).into(), 2 * core::mem::size_of::<usize>())
+    {
+        return -1;
+    }
+    let token = inner.memory_set.token();
     let (pipe_read, pipe_write) = make_pipe();
     let read_fd = inner.alloc_fd();
     inner.fd_table[read_fd] = Some(pipe_read);
