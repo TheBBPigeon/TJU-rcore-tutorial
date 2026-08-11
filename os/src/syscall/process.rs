@@ -1,13 +1,73 @@
 use crate::fs::{OpenFlags, open_file};
-use crate::mm::{translated_ref, translated_refmut, translated_str};
+use crate::mm::{
+    PageTable, VirtAddr, translated_byte_buffer, translated_ref, translated_refmut, translated_str,
+};
 use crate::task::{
-    SignalFlags, current_process, current_task, current_user_token, exit_current_and_run_next,
-    pid2process, suspend_current_and_run_next,
+    MAX_PRIORITY, MIN_PRIORITY, SchedStats, SignalFlags, current_process, current_task,
+    current_user_token, exit_current_and_run_next, pid2process, suspend_current_and_run_next,
 };
 use crate::timer::get_time_ms;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::mem::size_of;
+
+const USER_VA_LIMIT: usize = 1usize << 38;
+
+fn resolve_process(pid: usize) -> Option<Arc<crate::task::ProcessControlBlock>> {
+    if pid == 0 {
+        Some(current_process())
+    } else {
+        pid2process(pid)
+    }
+}
+
+fn user_range_writable(token: usize, start: usize, len: usize) -> bool {
+    if start == 0 || len == 0 || start >= USER_VA_LIMIT {
+        return false;
+    }
+    let Some(end) = start.checked_add(len - 1) else {
+        return false;
+    };
+    if end >= USER_VA_LIMIT {
+        return false;
+    }
+    let page_table = PageTable::from_token(token);
+    let mut address = start;
+    loop {
+        let Some(pte) = page_table.translate(VirtAddr::from(address).floor()) else {
+            return false;
+        };
+        if !pte.is_valid() || !pte.writable() {
+            return false;
+        }
+        if address >= end {
+            return true;
+        }
+        let next_page = (address & !0xfff).saturating_add(0x1000);
+        if next_page == 0 || next_page > end {
+            return true;
+        }
+        address = next_page;
+    }
+}
+
+fn write_sched_stats_to_user(stats_ptr: *mut SchedStats, stats: &SchedStats) -> bool {
+    let token = current_user_token();
+    let len = size_of::<SchedStats>();
+    if !user_range_writable(token, stats_ptr as usize, len) {
+        return false;
+    }
+    let source =
+        unsafe { core::slice::from_raw_parts((stats as *const SchedStats).cast::<u8>(), len) };
+    let mut copied = 0;
+    for destination in translated_byte_buffer(token, stats_ptr.cast::<u8>(), len) {
+        let count = destination.len();
+        destination.copy_from_slice(&source[copied..copied + count]);
+        copied += count;
+    }
+    copied == len
+}
 
 pub fn sys_exit(exit_code: i32) -> ! {
     exit_current_and_run_next(exit_code);
@@ -113,5 +173,35 @@ pub fn sys_kill(pid: usize, signal: u32) -> isize {
         }
     } else {
         -1
+    }
+}
+
+pub fn sys_set_priority(pid: usize, priority: usize) -> isize {
+    if !(MIN_PRIORITY..=MAX_PRIORITY).contains(&priority) {
+        return -2;
+    }
+    let Some(process) = resolve_process(pid) else {
+        return -1;
+    };
+    process.set_priority(priority);
+    0
+}
+
+pub fn sys_get_priority(pid: usize) -> isize {
+    let Some(process) = resolve_process(pid) else {
+        return -1;
+    };
+    process.priority().map_or(-1, |priority| priority as isize)
+}
+
+pub fn sys_get_sched_stats(pid: usize, stats_ptr: *mut SchedStats) -> isize {
+    let Some(process) = resolve_process(pid) else {
+        return -1;
+    };
+    let stats = process.sched_stats();
+    if write_sched_stats_to_user(stats_ptr, &stats) {
+        0
+    } else {
+        -2
     }
 }

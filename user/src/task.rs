@@ -1,5 +1,16 @@
 use super::*;
 
+#[derive(Copy, Clone, Debug, Default)]
+#[repr(C)]
+pub struct SchedStats {
+    pub pid: usize,
+    pub base_priority: usize,
+    pub effective_priority: usize,
+    pub runtime_ticks: usize,
+    pub total_wait_ticks: usize,
+    pub scheduled_count: usize,
+}
+
 pub fn exit(exit_code: i32) -> ! {
     sys_exit(exit_code);
 }
@@ -11,6 +22,22 @@ pub fn get_time() -> isize {
 }
 pub fn getpid() -> isize {
     sys_getpid()
+}
+pub fn set_priority(pid: usize, priority: usize) -> isize {
+    sys_set_priority(pid, priority)
+}
+pub fn get_priority(pid: usize) -> isize {
+    sys_get_priority(pid)
+}
+pub fn get_sched_stats(pid: usize, stats: &mut SchedStats) -> isize {
+    sys_get_sched_stats(pid, stats as *mut _)
+}
+/// Call the statistics syscall with a raw output pointer.
+///
+/// This is only needed by negative tests that verify invalid user pointers are
+/// rejected. Normal applications should use [`get_sched_stats`].
+pub unsafe fn get_sched_stats_raw(pid: usize, stats: *mut SchedStats) -> isize {
+    sys_get_sched_stats(pid, stats)
 }
 pub fn fork() -> isize {
     sys_fork()

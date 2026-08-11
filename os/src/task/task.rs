@@ -82,9 +82,10 @@ impl SchedInfo {
         self.effective_priority = self.base_priority;
     }
 
-    pub fn set_base_priority(&mut self, priority: usize) {
+    pub fn set_base_priority(&mut self, priority: usize, now: usize) {
+        debug_assert!((MIN_PRIORITY..=MAX_PRIORITY).contains(&priority));
         self.base_priority = priority;
-        self.effective_priority = priority;
+        self.refresh_effective_priority(now);
     }
 }
 

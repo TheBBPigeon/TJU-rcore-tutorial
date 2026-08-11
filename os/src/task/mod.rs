@@ -15,13 +15,13 @@ use crate::sbi::shutdown;
 use alloc::{sync::Arc, vec::Vec};
 use lazy_static::*;
 use manager::fetch_task;
-use process::ProcessControlBlock;
 use switch::__switch;
 
 pub use context::TaskContext;
 pub use id::{IDLE_PID, KernelStack, PidHandle, kstack_alloc, pid_alloc};
 #[allow(unused_imports)]
 pub use manager::{add_task, pid2process, remove_from_pid2process, scheduler_name, wakeup_task};
+pub use process::{ProcessControlBlock, SchedStats};
 pub use processor::{
     current_kstack_top, current_process, current_task, current_trap_cx, current_trap_cx_user_va,
     current_user_token, run_tasks, schedule, take_current_task,
@@ -68,6 +68,15 @@ pub fn on_current_task_timer_tick() -> bool {
     task.inner
         .exclusive_session(|inner| inner.sched_info.on_timer_tick());
     manager::should_preempt(&task)
+}
+
+/// Check for a time-slice or priority preemption without charging another
+/// timer tick. This is used before returning from a system call because a
+/// timer interrupt may have occurred while the kernel was running.
+pub fn should_preempt_current_task() -> bool {
+    current_task()
+        .as_ref()
+        .is_some_and(|task| manager::should_preempt(task))
 }
 
 pub fn block_current_and_run_next() {

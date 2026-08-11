@@ -16,6 +16,9 @@ const SYSCALL_GETPID: usize = 172;
 const SYSCALL_FORK: usize = 220;
 const SYSCALL_EXEC: usize = 221;
 const SYSCALL_WAITPID: usize = 260;
+const SYSCALL_SET_PRIORITY: usize = 1040;
+const SYSCALL_GET_PRIORITY: usize = 1041;
+const SYSCALL_GET_SCHED_STATS: usize = 1042;
 const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
@@ -128,6 +131,18 @@ pub fn sys_exec(path: &str, args: &[*const u8]) -> isize {
 
 pub fn sys_waitpid(pid: isize, exit_code: *mut i32) -> isize {
     syscall(SYSCALL_WAITPID, [pid as usize, exit_code as usize, 0])
+}
+
+pub fn sys_set_priority(pid: usize, priority: usize) -> isize {
+    syscall(SYSCALL_SET_PRIORITY, [pid, priority, 0])
+}
+
+pub fn sys_get_priority(pid: usize) -> isize {
+    syscall(SYSCALL_GET_PRIORITY, [pid, 0, 0])
+}
+
+pub fn sys_get_sched_stats(pid: usize, stats_ptr: *mut super::task::SchedStats) -> isize {
+    syscall(SYSCALL_GET_SCHED_STATS, [pid, stats_ptr as usize, 0])
 }
 
 pub fn sys_thread_create(entry: usize, arg: usize) -> isize {

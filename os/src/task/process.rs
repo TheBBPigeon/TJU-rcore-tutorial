@@ -6,11 +6,23 @@ use super::{SignalFlags, add_task};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{KERNEL_SPACE, MemorySet, translated_refmut};
 use crate::sync::{Condvar, Mutex, Semaphore, UPIntrFreeCell, UPIntrRefMut};
+use crate::timer::get_time_ticks;
 use crate::trap::{TrapContext, trap_handler};
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
+
+#[derive(Copy, Clone, Debug, Default)]
+#[repr(C)]
+pub struct SchedStats {
+    pub pid: usize,
+    pub base_priority: usize,
+    pub effective_priority: usize,
+    pub runtime_ticks: usize,
+    pub total_wait_ticks: usize,
+    pub scheduled_count: usize,
+}
 
 pub struct ProcessControlBlock {
     // immutable
@@ -260,5 +272,58 @@ impl ProcessControlBlock {
 
     pub fn getpid(&self) -> usize {
         self.pid.0
+    }
+
+    pub fn set_priority(&self, priority: usize) {
+        let now = get_time_ticks();
+        let inner = self.inner_exclusive_access();
+        for task in inner.tasks.iter().flatten() {
+            task.inner.exclusive_session(|task_inner| {
+                task_inner.sched_info.set_base_priority(priority, now)
+            });
+        }
+    }
+
+    pub fn priority(&self) -> Option<usize> {
+        let inner = self.inner_exclusive_access();
+        inner
+            .tasks
+            .iter()
+            .flatten()
+            .next()
+            .map(|task| task.inner_exclusive_access().sched_info.base_priority)
+    }
+
+    pub fn sched_stats(&self) -> SchedStats {
+        let now = get_time_ticks();
+        let inner = self.inner_exclusive_access();
+        let mut stats = SchedStats {
+            pid: self.getpid(),
+            ..SchedStats::default()
+        };
+        let mut found_task = false;
+        for task in inner.tasks.iter().flatten() {
+            let mut task_inner = task.inner_exclusive_access();
+            let sched = &mut task_inner.sched_info;
+            sched.refresh_effective_priority(now);
+            if !found_task {
+                stats.base_priority = sched.base_priority;
+                found_task = true;
+            }
+            stats.effective_priority = stats.effective_priority.max(sched.effective_priority);
+            stats.runtime_ticks = stats.runtime_ticks.saturating_add(sched.runtime_ticks);
+            stats.total_wait_ticks =
+                stats
+                    .total_wait_ticks
+                    .saturating_add(sched.total_wait_ticks.saturating_add(
+                        if sched.in_ready_queue {
+                            now.saturating_sub(sched.ready_since)
+                        } else {
+                            0
+                        },
+                    ));
+            stats.scheduled_count = stats.scheduled_count.saturating_add(sched.scheduled_count);
+        }
+        stats
     }
 }
