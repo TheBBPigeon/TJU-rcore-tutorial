@@ -22,6 +22,8 @@ const SYSCALL_CHDIR: usize = 49;
 const SYSCALL_GETDENTS: usize = 61;
 const SYSCALL_GETCWD: usize = 79;
 const SYSCALL_LSEEK: usize = 62;
+const SYSCALL_GETPATH: usize = 80;
+const SYSCALL_SETPATH: usize = 81;
 const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
@@ -72,6 +74,8 @@ pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
         SYSCALL_GETCWD => sys_getcwd(args[0] as *mut u8, args[1]),
         SYSCALL_GETDENTS => sys_getdents(args[0] as *const u8, args[1] as *mut u8, args[2]),
         SYSCALL_LSEEK => sys_lseek(args[0], args[1] as isize, args[2] as u32),
+        SYSCALL_GETPATH => sys_getpath(args[0] as *mut u8, args[1]),
+        SYSCALL_SETPATH => sys_setpath(args[0] as *const u8),
         SYSCALL_EXIT => sys_exit(args[0] as i32),
         SYSCALL_SLEEP => sys_sleep(args[0]),
         SYSCALL_YIELD => sys_yield(),

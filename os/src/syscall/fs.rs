@@ -246,6 +246,35 @@ pub fn sys_getdents(path: *const u8, buf: *mut u8, len: usize) -> isize {
     write_len as isize
 }
 
+/// Get the PATH variable for the current process.
+pub fn sys_getpath(buf: *mut u8, len: usize) -> isize {
+    let token = current_user_token();
+    let process = current_process();
+    let inner = process.inner_exclusive_access();
+    let path = inner.get_path_variable();
+    drop(inner);
+    let path_bytes = path.as_bytes();
+    let write_len = core::cmp::min(path_bytes.len(), len);
+    let mut buffers = translated_byte_buffer(token, buf, write_len);
+    let mut offset = 0;
+    for slice in buffers.iter_mut() {
+        let end = core::cmp::min(offset + slice.len(), write_len);
+        slice[..end - offset].copy_from_slice(&path_bytes[offset..end]);
+        offset = end;
+    }
+    write_len as isize
+}
+
+/// Set the PATH variable for the current process.
+pub fn sys_setpath(path: *const u8) -> isize {
+    let token = current_user_token();
+    let path = translated_str(token, path);
+    let process = current_process();
+    let mut inner = process.inner_exclusive_access();
+    inner.set_path_variable(path);
+    0
+}
+
 /// Move the file offset for a given fd.
 /// Stub — not yet implemented.
 pub fn sys_lseek(_fd: usize, _offset: isize, _whence: u32) -> isize {

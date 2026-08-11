@@ -50,6 +50,14 @@ pub fn getcwd(buf: &mut [u8]) -> isize {
     sys_getcwd(buf)
 }
 
+pub fn getpath(buf: &mut [u8]) -> isize {
+    sys_getpath(buf)
+}
+
+pub fn setpath(path: &str) -> isize {
+    sys_setpath(path)
+}
+
 pub fn lseek(fd: usize, offset: isize, whence: u32) -> isize {
     sys_lseek(fd, offset, whence)
 }

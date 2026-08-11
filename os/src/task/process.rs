@@ -29,6 +29,7 @@ pub struct ProcessControlBlockInner {
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
     pub working_directory: Arc<Inode>,
     pub working_directory_path: String,
+    pub path_variable: String,
     pub signals: SignalFlags,
     pub tasks: Vec<Option<Arc<TaskControlBlock>>>,
     pub task_res_allocator: RecycleAllocator,
@@ -66,6 +67,14 @@ impl ProcessControlBlockInner {
 
     pub fn get_working_directory_path(&self) -> String {
         self.working_directory_path.clone()
+    }
+
+    pub fn set_path_variable(&mut self, path: String) {
+        self.path_variable = path;
+    }
+
+    pub fn get_path_variable(&self) -> String {
+        self.path_variable.clone()
     }
 
     pub fn alloc_tid(&mut self) -> usize {
@@ -114,6 +123,7 @@ impl ProcessControlBlock {
                     ],
                     working_directory: get_root_inode(),
                     working_directory_path: String::from("/"),
+                    path_variable: String::from("/bin"),
                     signals: SignalFlags::empty(),
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
@@ -235,6 +245,7 @@ impl ProcessControlBlock {
                     fd_table: new_fd_table,
                     working_directory: parent.working_directory.clone(),
                     working_directory_path: parent.working_directory_path.clone(),
+                    path_variable: parent.path_variable.clone(),
                     signals: SignalFlags::empty(),
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),

@@ -55,16 +55,31 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
             args = args.add(1);
         }
     }
-    // CWD-aware path resolution for exec
     let process = current_process();
-    let root = if path.starts_with('/') {
-        get_root_inode()
+    let app_inode = if path.contains('/') {
+        // Absolute or relative path: resolve from CWD
+        let root = if path.starts_with('/') {
+            get_root_inode()
+        } else {
+            process.inner_exclusive_access().get_working_directory()
+        };
+        open_file_at(&root, path.as_str(), OpenFlags::RDONLY)
     } else {
-        process.inner_exclusive_access().get_working_directory()
+        // Bare command name: search PATH
+        let path_var = process.inner_exclusive_access().get_path_variable();
+        let root = get_root_inode();
+        let mut found = None;
+        for dir in path_var.split(':') {
+            let full_path = String::from(dir) + "/" + &path;
+            if let Some(inode) = open_file_at(&root, full_path.as_str(), OpenFlags::RDONLY) {
+                found = Some(inode);
+                break;
+            }
+        }
+        found
     };
-    if let Some(app_inode) = open_file_at(&root, path.as_str(), OpenFlags::RDONLY) {
+    if let Some(app_inode) = app_inode {
         let all_data = app_inode.read_all();
-        // Validate that the file is a valid ELF binary
         if all_data.len() < 4
             || all_data[0] != 0x7f
             || all_data[1] != 0x45

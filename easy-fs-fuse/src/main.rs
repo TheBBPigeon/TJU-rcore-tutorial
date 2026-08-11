@@ -1,5 +1,5 @@
 use clap::{App, Arg};
-use easy_fs::{BlockDevice, EasyFileSystem};
+use easy_fs::{BlockDevice, DiskInodeType, EasyFileSystem};
 use std::fs::{read_dir, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
@@ -65,6 +65,15 @@ fn easy_fs_pack() -> std::io::Result<()> {
     // 32MiB, at most 4095 files
     let efs = EasyFileSystem::create(block_file, 32 * 2048, 1);
     let root_inode = Arc::new(EasyFileSystem::root_inode(&efs));
+
+    // Create standard directory layout
+    let bin_dir = root_inode.create_as("bin", DiskInodeType::Directory)
+        .expect("failed to create /bin");
+    root_inode.create_as("home", DiskInodeType::Directory)
+        .expect("failed to create /home");
+    root_inode.create_as("tmp", DiskInodeType::Directory)
+        .expect("failed to create /tmp");
+
     let apps: Vec<_> = read_dir(src_path)
         .unwrap()
         .into_iter()
@@ -78,10 +87,15 @@ fn easy_fs_pack() -> std::io::Result<()> {
         let mut host_file = File::open(format!("{}{}", target_path, app)).unwrap();
         let mut all_data: Vec<u8> = Vec::new();
         host_file.read_to_end(&mut all_data).unwrap();
-        // create a file in easy-fs
-        let inode = root_inode.create(app.as_str()).unwrap();
-        // write data to easy-fs
-        inode.write_at(0, all_data.as_slice());
+        if app == "initproc" {
+            // Keep initproc at root level for kernel bootstrap
+            let inode = root_inode.create(app.as_str()).unwrap();
+            inode.write_at(0, all_data.as_slice());
+        } else {
+            // Pack other apps under /bin
+            let inode = bin_dir.create(app.as_str()).unwrap();
+            inode.write_at(0, all_data.as_slice());
+        }
     }
     // list apps
     // for app in root_inode.ls() {

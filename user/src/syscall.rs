@@ -22,6 +22,8 @@ const SYSCALL_CHDIR: usize = 49;
 const SYSCALL_GETDENTS: usize = 61;
 const SYSCALL_GETCWD: usize = 79;
 const SYSCALL_LSEEK: usize = 62;
+const SYSCALL_GETPATH: usize = 80;
+const SYSCALL_SETPATH: usize = 81;
 const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
@@ -224,6 +226,15 @@ pub fn sys_getdents(path: &str, buf: &mut [u8]) -> isize {
 
 pub fn sys_getcwd(buf: &mut [u8]) -> isize {
     syscall(SYSCALL_GETCWD, [buf.as_mut_ptr() as usize, buf.len(), 0])
+}
+
+pub fn sys_getpath(buf: &mut [u8]) -> isize {
+    syscall(SYSCALL_GETPATH, [buf.as_mut_ptr() as usize, buf.len(), 0])
+}
+
+pub fn sys_setpath(path: &str) -> isize {
+    let path_buf = null_terminated_path(path);
+    syscall(SYSCALL_SETPATH, [path_buf.as_ptr() as usize, 0, 0])
 }
 
 pub fn sys_lseek(fd: usize, offset: isize, whence: u32) -> isize {

@@ -58,8 +58,10 @@ pub fn get_root_inode() -> Arc<Inode> {
 
 pub fn list_apps() {
     println!("/**** APPS ****");
-    for app in ROOT_INODE.ls() {
-        println!("{}", app);
+    if let Some(bin_dir) = ROOT_INODE.find("bin") {
+        for app in bin_dir.ls() {
+            println!("{}", app);
+        }
     }
     println!("**************/")
 }
