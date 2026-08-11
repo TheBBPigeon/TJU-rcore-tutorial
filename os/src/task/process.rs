@@ -188,8 +188,14 @@ impl ProcessControlBlock {
     pub fn fork(self: &Arc<Self>) -> Arc<Self> {
         let mut parent = self.inner_exclusive_access();
         assert_eq!(parent.thread_count(), 1);
-        // clone parent's memory_set completely including trampoline/ustacks/trap_cxs
-        let memory_set = MemorySet::from_existed_user(&parent.memory_set);
+        // Share user pages with the child. Writable pages become read-only
+        // COW mappings in both address spaces; kernel-only pages such as the
+        // trap context are still copied eagerly.
+        let (memory_set, cow_stats) = MemorySet::from_existed_user_cow(&mut parent.memory_set);
+        println!(
+            "[cow] fork: shared={} copied={} newly_allocated={}",
+            cow_stats.shared_pages, cow_stats.copied_pages, cow_stats.allocated_frames,
+        );
         // alloc a pid
         let pid = pid_alloc();
         // copy fd table
