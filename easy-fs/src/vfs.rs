@@ -95,6 +95,10 @@ impl Inode {
 
     /// Create a new inode of the specified type (File or Directory) in this directory.
     pub fn create_as(&self, name: &str, inode_type: DiskInodeType) -> Option<Arc<Inode>> {
+        // Reject reserved names
+        if name == "." || name == ".." {
+            return None;
+        }
         // Compute parent inode number BEFORE acquiring the fs lock,
         // since inode_number() internally acquires self.fs.lock().
         let parent_inode_number = self.inode_number();
@@ -362,6 +366,10 @@ impl Inode {
     /// `rm`. For directories, the directory must be empty.
     /// Returns Some(inode_number) of the removed entry, or None if not found.
     pub fn unlink(&self, name: &str) -> Option<u32> {
+        // Reject reserved names
+        if name == "." || name == ".." {
+            return None;
+        }
         // Step 1: Find the target inode WITHOUT holding this directory's fs lock.
         // `find()` acquires and releases the lock internally.
         let target_inode = self.find(name)?;
