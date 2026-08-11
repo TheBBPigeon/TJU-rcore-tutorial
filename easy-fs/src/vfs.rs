@@ -238,8 +238,10 @@ impl Inode {
         }
         if component == ".." {
             let parent_id = self.read_disk_inode(|disk_inode| disk_inode.parent_inode);
-            if parent_id == 0 {
-                // Already at root, or root has no parent
+            // parent_id == 0 means either we are root (self-parent), or our
+            // parent is root (inode 0). Check which case by seeing if we
+            // ourselves are root.
+            if parent_id == 0 && self.is_root() {
                 return Some(Arc::new(Self::new(
                     self.block_id as u32,
                     self.block_offset,
@@ -264,6 +266,11 @@ impl Inode {
         self.modify_disk_inode(|disk_inode| {
             disk_inode.parent_inode = parent_id;
         });
+    }
+
+    /// Check if this is the root inode (inode 0).
+    fn is_root(&self) -> bool {
+        self.inode_number() == 0
     }
 
     /// Check if this inode is a directory.
