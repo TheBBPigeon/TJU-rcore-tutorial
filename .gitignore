@@ -26,3 +26,7 @@ pushall.sh
 /.kiro/
 /.cody/
 /.copilot/
+
+# Local temporary and course-design files
+/tmp/
+/操作系统课程设计/
