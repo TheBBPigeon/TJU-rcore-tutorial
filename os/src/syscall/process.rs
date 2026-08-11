@@ -64,6 +64,16 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
     };
     if let Some(app_inode) = open_file_at(&root, path.as_str(), OpenFlags::RDONLY) {
         let all_data = app_inode.read_all();
+        // Validate that the file is a valid ELF binary
+        if all_data.len() < 4
+            || all_data[0] != 0x7f
+            || all_data[1] != 0x45
+            || all_data[2] != 0x4c
+            || all_data[3] != 0x46
+        {
+            println!("[sys_exec] FAILED: '{}' is not a valid ELF executable", path);
+            return -1;
+        }
         let process = current_process();
         let argc = args_vec.len();
         process.exec(all_data.as_slice(), args_vec);

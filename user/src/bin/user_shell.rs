@@ -206,7 +206,10 @@ pub fn main() -> i32 {
                                 }
                                 // execute new application
                                 if exec(args_copy[0].as_str(), args_addr.as_slice()) == -1 {
-                                    println!("Error when executing!");
+                                    println!(
+                                        "{}: command not found",
+                                        args_copy[0].trim_end_matches('\0')
+                                    );
                                     return -4;
                                 }
                                 unreachable!();
