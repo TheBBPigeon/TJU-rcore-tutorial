@@ -191,21 +191,26 @@ pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
         return -1;
     }
 
-    let old_parent = if old_parent_path.is_empty() || old_parent_path == "/" {
-        root.clone()
-    } else {
-        match lookup_path_from(root, old_parent_path) {
-            Some(p) => p,
-            None => return -1,
+    // Resolve parent directories: absolute paths use ROOT_INODE,
+    // relative paths use the passed-in root (CWD).
+    let resolve_parent = |parent_path: &str| -> Option<Arc<Inode>> {
+        if parent_path.is_empty() || parent_path == "/" {
+            return Some(if parent_path == "/" { get_root_inode() } else { root.clone() });
         }
+        let base = if parent_path.starts_with('/') {
+            get_root_inode()
+        } else {
+            root.clone()
+        };
+        lookup_path_from(&base, parent_path)
     };
-    let new_parent = if new_parent_path.is_empty() || new_parent_path == "/" {
-        root.clone()
-    } else {
-        match lookup_path_from(root, new_parent_path) {
-            Some(p) => p,
-            None => return -1,
-        }
+    let old_parent = match resolve_parent(old_parent_path) {
+        Some(p) => p,
+        None => return -1,
+    };
+    let new_parent = match resolve_parent(new_parent_path) {
+        Some(p) => p,
+        None => return -1,
     };
 
     // Same directory: simple rename
