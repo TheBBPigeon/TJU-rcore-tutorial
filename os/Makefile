@@ -74,6 +74,7 @@ disasm-vim: kernel
 run: run-inner
 
 run-persist: qemu-version-check
+	@test -f $(FS_IMG) || (echo "Error: fs.img not found. Run 'make run' first to create it." && exit 1)
 	@qemu-system-riscv64 $(QEMU_ARGS)
 
 QEMU_ARGS := -machine virt \
