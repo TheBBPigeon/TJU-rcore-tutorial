@@ -1,6 +1,6 @@
 use crate::fs::{
     OpenFlags, make_directory_at, make_pipe, open_file_at, rename_at, unlink_at,
-    list_directory_at, lookup_path_from, get_root_inode,
+    lookup_path_from, get_root_inode,
 };
 use crate::mm::{UserBuffer, translated_byte_buffer, translated_refmut, translated_str};
 use crate::task::{current_process, current_user_token};
@@ -259,13 +259,27 @@ pub fn sys_getdents(path: *const u8, buf: *mut u8, len: usize) -> isize {
     } else {
         process.inner_exclusive_access().get_working_directory()
     };
-    let entries = match list_directory_at(&root, path_str.as_str()) {
-        Some(e) => e,
-        None => return -1,
+    let dir = if path_str.is_empty() || path_str == "/" {
+        root.clone()
+    } else {
+        match lookup_path_from(&root, path_str.as_str()) {
+            Some(d) => d,
+            None => return -1,
+        }
     };
+    if !dir.is_dir() {
+        return -1;
+    }
+    let entries = dir.ls();
 
     let mut listing = alloc::string::String::new();
     for name in &entries {
+        let entry_type = if let Some(inode) = dir.find(name) {
+            if inode.is_dir() { "d " } else { "f " }
+        } else {
+            "? "
+        };
+        listing.push_str(entry_type);
         listing.push_str(name);
         listing.push('\n');
     }
