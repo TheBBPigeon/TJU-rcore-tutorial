@@ -71,7 +71,6 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
             || all_data[2] != 0x4c
             || all_data[3] != 0x46
         {
-            println!("[sys_exec] FAILED: '{}' is not a valid ELF executable", path);
             return -1;
         }
         let process = current_process();

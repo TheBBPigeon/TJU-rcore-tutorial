@@ -11,13 +11,11 @@ use user_lib::unlink;
 pub fn main(argc: usize, argv: &[&str]) -> i32 {
     assert!(argc >= 2, "Usage: rm <file>");
     let path = argv[1];
-    println!("[rm] path='{}'", path);
-
     let result = unlink(path);
     if result < 0 {
-        println!("rm: cannot remove '{}': error {}", path, result);
+        println!("rm: cannot remove '{}': No such file or directory", path);
         return -1;
     }
-    println!("[rm] result={}", result);
+    println!("removed {}", path);
     0
 }

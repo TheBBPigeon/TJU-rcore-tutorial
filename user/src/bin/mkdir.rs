@@ -11,13 +11,11 @@ use user_lib::mkdir;
 pub fn main(argc: usize, argv: &[&str]) -> i32 {
     assert!(argc >= 2, "Usage: mkdir <directory>");
     let path = argv[1];
-    println!("[mkdir] path='{}'", path);
-
     let result = mkdir(path);
     if result < 0 {
-        println!("mkdir: cannot create directory '{}': error {}", path, result);
+        println!("mkdir: cannot create directory '{}': File exists", path);
         return -1;
     }
-    println!("[mkdir] result={}", result);
+    println!("created directory {}", path);
     0
 }

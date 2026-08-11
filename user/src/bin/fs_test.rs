@@ -7,26 +7,18 @@ extern crate alloc;
 
 use user_lib::{OpenFlags, chdir, close, getdents, mkdir, open, unlink};
 
-/// Print a heading line for each test step.
-fn step(description: &str) {
-    println!("");
-    println!("--- {} ---", description);
-}
-
-/// Run `ls` equivalent: call getdents on the given path and print result.
 fn list_directory(path: &str) -> bool {
     let mut buf = [0u8; 4096];
     let result = getdents(path, &mut buf);
     if result < 0 {
-        println!("  FAILED: getdents('{}') returned {}", path, result);
+        println!("  FAILED: cannot list '{}'", path);
         return false;
     }
     let len = result as usize;
     if len == 0 {
         println!("  (empty)");
     } else {
-        let listing = core::str::from_utf8(&buf[..len]).unwrap_or("<invalid utf8>");
-        // Print each line with indent
+        let listing = core::str::from_utf8(&buf[..len]).unwrap_or("");
         for line in listing.lines() {
             if !line.is_empty() {
                 println!("  {}", line);
@@ -38,146 +30,132 @@ fn list_directory(path: &str) -> bool {
 
 #[unsafe(no_mangle)]
 pub fn main(_argc: usize, _argv: &[&str]) -> i32 {
-    println!("");
-    println!("========================================");
-    println!("  fs_test: File System Test Suite");
-    println!("========================================");
+    println!("=== fs_test: File System Test Suite ===");
 
-    // Step 1: ls root
-    step("1. ls / (list root directory)");
+    // 1. ls /
+    println!("--- 1. ls / ---");
     list_directory("/");
 
-    // Step 2: touch hello.txt
-    step("2. touch hello.txt");
+    // 2. touch hello.txt
+    println!("--- 2. touch hello.txt ---");
     let fd = open("hello.txt", OpenFlags::CREATE | OpenFlags::WRONLY);
     if fd >= 0 {
-        println!("  ok: created hello.txt, fd={}", fd);
+        println!("  created hello.txt");
         close(fd as usize);
     } else {
         println!("  FAILED: open returned {}", fd);
     }
 
-    // Step 3: ls (verify hello.txt)
-    step("3. ls / (verify hello.txt)");
+    // 3. ls /
+    println!("--- 3. ls / ---");
     list_directory("/");
 
-    // Step 4: mkdir testdir
-    step("4. mkdir testdir");
-    let result = mkdir("testdir");
-    if result == 0 {
-        println!("  ok: created testdir");
+    // 4. mkdir testdir
+    println!("--- 4. mkdir testdir ---");
+    if mkdir("testdir") == 0 {
+        println!("  created directory testdir");
     } else {
-        println!("  FAILED: mkdir returned {}", result);
+        println!("  FAILED: mkdir returned -1");
     }
 
-    // Step 5: ls (verify testdir)
-    step("5. ls / (verify testdir)");
+    // 5. ls /
+    println!("--- 5. ls / ---");
     list_directory("/");
 
-    // Step 6: cd testdir
-    step("6. cd testdir");
-    let result = chdir("testdir");
-    if result == 0 {
-        println!("  ok: changed to testdir");
+    // 6. cd testdir
+    println!("--- 6. cd testdir ---");
+    if chdir("testdir") == 0 {
+        println!("  changed to testdir");
     } else {
-        println!("  FAILED: chdir returned {}", result);
+        println!("  FAILED: chdir returned -1");
     }
 
-    // Step 7: ls (empty dir)
-    step("7. ls (should be empty)");
+    // 7. ls
+    println!("--- 7. ls ---");
     list_directory(".");
 
-    // Step 8: touch inner.txt
-    step("8. touch inner.txt");
+    // 8. touch inner.txt
+    println!("--- 8. touch inner.txt ---");
     let fd = open("inner.txt", OpenFlags::CREATE | OpenFlags::WRONLY);
     if fd >= 0 {
-        println!("  ok: created inner.txt, fd={}", fd);
+        println!("  created inner.txt");
         close(fd as usize);
     } else {
         println!("  FAILED: open returned {}", fd);
     }
 
-    // Step 9: ls (verify inner.txt)
-    step("9. ls (verify inner.txt)");
+    // 9. ls
+    println!("--- 9. ls ---");
     list_directory(".");
 
-    // Step 10: mkdir nested
-    step("10. mkdir nested");
-    let result = mkdir("nested");
-    if result == 0 {
-        println!("  ok: created nested");
+    // 10. mkdir nested
+    println!("--- 10. mkdir nested ---");
+    if mkdir("nested") == 0 {
+        println!("  created directory nested");
     } else {
-        println!("  FAILED: mkdir returned {}", result);
+        println!("  FAILED: mkdir returned -1");
     }
 
-    // Step 11: ls (verify nested)
-    step("11. ls (verify nested)");
+    // 11. ls
+    println!("--- 11. ls ---");
     list_directory(".");
 
-    // Step 12: rm inner.txt
-    step("12. rm inner.txt");
-    let result = unlink("inner.txt");
-    if result == 0 {
-        println!("  ok: removed inner.txt");
+    // 12. rm inner.txt
+    println!("--- 12. rm inner.txt ---");
+    if unlink("inner.txt") == 0 {
+        println!("  removed inner.txt");
     } else {
-        println!("  FAILED: unlink returned {}", result);
+        println!("  FAILED: unlink returned -1");
     }
 
-    // Step 13: ls (verify inner.txt gone)
-    step("13. ls (verify inner.txt gone)");
+    // 13. ls
+    println!("--- 13. ls ---");
     list_directory(".");
 
-    // Step 14: rm nested
-    step("14. rm nested");
-    let result = unlink("nested");
-    if result == 0 {
-        println!("  ok: removed nested");
+    // 14. rm nested
+    println!("--- 14. rm nested ---");
+    if unlink("nested") == 0 {
+        println!("  removed nested");
     } else {
-        println!("  FAILED: unlink returned {}", result);
+        println!("  FAILED: unlink returned -1");
     }
 
-    // Step 15: ls (verify nested gone)
-    step("15. ls (verify nested gone)");
+    // 15. ls
+    println!("--- 15. ls ---");
     list_directory(".");
 
-    // Step 16: cd /
-    step("16. cd /");
-    let result = chdir("/");
-    if result == 0 {
-        println!("  ok: changed to /");
+    // 16. cd /
+    println!("--- 16. cd / ---");
+    if chdir("/") == 0 {
+        println!("  changed to /");
     } else {
-        println!("  FAILED: chdir returned {}", result);
+        println!("  FAILED: chdir returned -1");
     }
 
-    // Step 17: ls (verify back to root)
-    step("17. ls / (verify back to root)");
+    // 17. ls /
+    println!("--- 17. ls / ---");
     list_directory("/");
 
-    // Step 18: rm hello.txt
-    step("18. rm hello.txt");
-    let result = unlink("hello.txt");
-    if result == 0 {
-        println!("  ok: removed hello.txt");
+    // 18. rm hello.txt
+    println!("--- 18. rm hello.txt ---");
+    if unlink("hello.txt") == 0 {
+        println!("  removed hello.txt");
     } else {
-        println!("  FAILED: unlink returned {}", result);
+        println!("  FAILED: unlink returned -1");
     }
 
-    // Step 19: rm testdir
-    step("19. rm testdir");
-    let result = unlink("testdir");
-    if result == 0 {
-        println!("  ok: removed testdir");
+    // 19. rm testdir
+    println!("--- 19. rm testdir ---");
+    if unlink("testdir") == 0 {
+        println!("  removed testdir");
     } else {
-        println!("  FAILED: unlink returned {}", result);
+        println!("  FAILED: unlink returned -1");
     }
 
-    // Step 20: ls (clean)
-    step("20. ls / (should be clean)");
+    // 20. ls /
+    println!("--- 20. ls / ---");
     list_directory("/");
 
-    println!("");
-    println!("========================================");
-    println!("  fs_test: ALL TESTS COMPLETED");
-    println!("========================================");
+    println!("=== fs_test: ALL TESTS COMPLETED ===");
     0
 }

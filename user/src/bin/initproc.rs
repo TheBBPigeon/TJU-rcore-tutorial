@@ -25,9 +25,7 @@ fn main() -> i32 {
         }
     }
 
-    println!("");
-    println!("[initproc] fs_test completed, starting user shell...");
-    println!("");
+    println!("[initproc] starting user shell...");
 
     // Start the user shell
     if fork() == 0 {

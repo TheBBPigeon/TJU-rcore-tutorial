@@ -140,7 +140,7 @@ pub fn main() -> i32 {
                         let path = target.trim_end_matches('\0');
                         let result = chdir(path);
                         if result != 0 {
-                            println!("cd: {}: Not a directory", path.trim_end_matches('\0'));
+                            println!("cd: {}: No such file or directory", path.trim_end_matches('\0'));
                         }
                     } else {
                         // create pipes

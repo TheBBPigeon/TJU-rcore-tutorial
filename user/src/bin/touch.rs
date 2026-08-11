@@ -11,14 +11,12 @@ use user_lib::{OpenFlags, open};
 pub fn main(argc: usize, argv: &[&str]) -> i32 {
     assert!(argc >= 2, "Usage: touch <file>");
     let path = argv[1];
-    println!("[touch] path='{}'", path);
-
     let fd = open(path, OpenFlags::CREATE | OpenFlags::WRONLY);
     if fd < 0 {
         println!("touch: cannot touch '{}': Is a directory", path);
         return -1;
     }
-    println!("[touch] created={}", fd >= 0);
     user_lib::close(fd as usize);
+    println!("created {}", path);
     0
 }

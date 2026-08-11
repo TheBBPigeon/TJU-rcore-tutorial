@@ -53,23 +53,18 @@ fn easy_fs_pack() -> std::io::Result<()> {
     let src_path = matches.value_of("source").unwrap();
     let target_path = matches.value_of("target").unwrap();
     println!("src_path = {}\ntarget_path = {}", src_path, target_path);
-    eprintln!("[easy-fs-fuse] Creating disk image...");
     let block_file = Arc::new(BlockFile(Mutex::new({
         let f = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .open(format!("{}{}", target_path, "fs.img"))?;
-        eprintln!("[easy-fs-fuse] Setting file size...");
         f.set_len(32 * 2048 * 512).unwrap();
         f
     })));
-    eprintln!("[easy-fs-fuse] Creating filesystem...");
     // 32MiB, at most 4095 files
     let efs = EasyFileSystem::create(block_file, 32 * 2048, 1);
-    eprintln!("[easy-fs-fuse] Filesystem created, getting root inode...");
     let root_inode = Arc::new(EasyFileSystem::root_inode(&efs));
-    eprintln!("[easy-fs-fuse] Reading source directory...");
     let apps: Vec<_> = read_dir(src_path)
         .unwrap()
         .into_iter()
@@ -78,9 +73,7 @@ fn easy_fs_pack() -> std::io::Result<()> {
             name_with_ext.strip_suffix(".rs").map(str::to_owned)
         })
         .collect();
-    eprintln!("[easy-fs-fuse] Found {} apps to pack", apps.len());
-    for app in &apps {
-        eprintln!("[easy-fs-fuse] Packing: {}", app);
+    for app in apps {
         // load app data from host file system
         let mut host_file = File::open(format!("{}{}", target_path, app)).unwrap();
         let mut all_data: Vec<u8> = Vec::new();
@@ -90,7 +83,6 @@ fn easy_fs_pack() -> std::io::Result<()> {
         // write data to easy-fs
         inode.write_at(0, all_data.as_slice());
     }
-    eprintln!("[easy-fs-fuse] Done packing!");
     // list apps
     // for app in root_inode.ls() {
     //     println!("{}", app);
