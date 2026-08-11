@@ -7,7 +7,7 @@ use crate::{
 };
 use alloc::sync::{Arc, Weak};
 
-use super::scheduler::{DEFAULT_PRIORITY, MAX_PRIORITY, MIN_PRIORITY};
+use super::scheduler::{AGING_INTERVAL_TICKS, DEFAULT_PRIORITY, MAX_PRIORITY, MIN_PRIORITY};
 
 #[derive(Copy, Clone, Debug)]
 pub struct SchedInfo {
@@ -60,6 +60,20 @@ impl SchedInfo {
     pub fn on_timer_tick(&mut self) {
         self.runtime_ticks = self.runtime_ticks.saturating_add(1);
         self.slice_ticks = self.slice_ticks.saturating_add(1);
+    }
+
+    pub fn refresh_effective_priority(&mut self, now: usize) -> usize {
+        if self.in_ready_queue {
+            let waited_ticks = now.saturating_sub(self.ready_since);
+            let aging_boost = waited_ticks / AGING_INTERVAL_TICKS;
+            self.effective_priority = self
+                .base_priority
+                .saturating_add(aging_boost)
+                .min(MAX_PRIORITY);
+        } else {
+            self.effective_priority = self.base_priority;
+        }
+        self.effective_priority
     }
 
     pub fn on_block(&mut self) {
@@ -120,6 +134,15 @@ impl TaskControlBlock {
         ustack_base: usize,
         alloc_user_res: bool,
     ) -> Self {
+        Self::new_with_priority(process, ustack_base, alloc_user_res, DEFAULT_PRIORITY)
+    }
+
+    pub fn new_with_priority(
+        process: Arc<ProcessControlBlock>,
+        ustack_base: usize,
+        alloc_user_res: bool,
+        priority: usize,
+    ) -> Self {
         let res = TaskUserRes::new(Arc::clone(&process), ustack_base, alloc_user_res);
         let trap_cx_ppn = res.trap_cx_ppn();
         let kstack = kstack_alloc();
@@ -134,7 +157,7 @@ impl TaskControlBlock {
                     task_cx: TaskContext::goto_trap_return(kstack_top),
                     task_status: TaskStatus::Ready,
                     exit_code: None,
-                    sched_info: SchedInfo::new(DEFAULT_PRIORITY),
+                    sched_info: SchedInfo::new(priority),
                 })
             },
         }

@@ -8,8 +8,9 @@ use alloc::sync::Arc;
 pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
     let task = current_task().unwrap();
     let process = task.process.upgrade().unwrap();
+    let inherited_priority = task.inner_exclusive_access().sched_info.base_priority;
     // create a new thread
-    let new_task = Arc::new(TaskControlBlock::new(
+    let new_task = Arc::new(TaskControlBlock::new_with_priority(
         Arc::clone(&process),
         task.inner_exclusive_access()
             .res
@@ -17,6 +18,7 @@ pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
             .unwrap()
             .ustack_base,
         true,
+        inherited_priority,
     ));
     // add new task to scheduler
     add_task(Arc::clone(&new_task));

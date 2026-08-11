@@ -38,8 +38,4 @@ impl Scheduler for RoundRobinScheduler {
         }
         current.inner_exclusive_access().sched_info.slice_ticks >= ROUND_ROBIN_TIME_SLICE
     }
-
-    fn ready_len(&self) -> usize {
-        self.ready_queue.len()
-    }
 }

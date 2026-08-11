@@ -188,6 +188,11 @@ impl ProcessControlBlock {
     pub fn fork(self: &Arc<Self>) -> Arc<Self> {
         let mut parent = self.inner_exclusive_access();
         assert_eq!(parent.thread_count(), 1);
+        let inherited_priority = parent
+            .get_task(0)
+            .inner_exclusive_access()
+            .sched_info
+            .base_priority;
         // clone parent's memory_set completely including trampoline/ustacks/trap_cxs
         let memory_set = MemorySet::from_existed_user(&parent.memory_set);
         // alloc a pid
@@ -224,7 +229,7 @@ impl ProcessControlBlock {
         // add child
         parent.children.push(Arc::clone(&child));
         // create main thread of child process
-        let task = Arc::new(TaskControlBlock::new(
+        let task = Arc::new(TaskControlBlock::new_with_priority(
             Arc::clone(&child),
             parent
                 .get_task(0)
@@ -236,6 +241,7 @@ impl ProcessControlBlock {
             // here we do not allocate trap_cx or ustack again
             // but mention that we allocate a new kstack here
             false,
+            inherited_priority,
         ));
         // attach task to child process
         let mut child_inner = child.inner_exclusive_access();

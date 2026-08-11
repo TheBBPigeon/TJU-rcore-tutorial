@@ -39,9 +39,6 @@ impl TaskManager {
     pub fn scheduler_name(&self) -> &'static str {
         self.scheduler.name()
     }
-    pub fn ready_len(&self) -> usize {
-        self.scheduler.ready_len()
-    }
 }
 
 lazy_static! {
@@ -72,10 +69,6 @@ pub fn should_preempt(current: &Arc<TaskControlBlock>) -> bool {
 
 pub fn scheduler_name() -> &'static str {
     TASK_MANAGER.exclusive_access().scheduler_name()
-}
-
-pub fn ready_task_count() -> usize {
-    TASK_MANAGER.exclusive_access().ready_len()
 }
 
 pub fn pid2process(pid: usize) -> Option<Arc<ProcessControlBlock>> {

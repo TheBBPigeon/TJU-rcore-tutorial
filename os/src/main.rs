@@ -82,6 +82,7 @@ pub fn rust_main(_hart_id: usize, dtb_pa: usize) -> ! {
     timer::set_next_trigger();
     board::device_init();
     fs::list_apps();
+    println!("[kernel] scheduler: {}", task::scheduler_name());
     task::add_initproc();
     *DEV_NON_BLOCKING_ACCESS.exclusive_access() = true;
     task::run_tasks();
