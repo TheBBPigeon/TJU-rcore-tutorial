@@ -7,7 +7,7 @@ pub use ns16550a::NS16550a;
 
 pub trait CharDevice {
     fn init(&self);
-    fn read(&self) -> u8;
+    fn try_read(&self) -> Option<u8>;
     fn write(&self, ch: u8);
     fn handle_irq(&self);
 }

@@ -28,6 +28,12 @@ const SYSCALL_SEMAPHORE_DOWN: usize = 1022;
 const SYSCALL_CONDVAR_CREATE: usize = 1030;
 const SYSCALL_CONDVAR_SIGNAL: usize = 1031;
 const SYSCALL_CONDVAR_WAIT: usize = 1032;
+const SYSCALL_SETPGID: usize = 1100;
+const SYSCALL_GETPGRP: usize = 1101;
+const SYSCALL_TCSETPGRP: usize = 1102;
+const SYSCALL_TCGETPGRP: usize = 1103;
+const SYSCALL_TTY_CTL: usize = 1104;
+const SYSCALL_SIGACTION: usize = 1105;
 const SYSCALL_FRAMEBUFFER: usize = 2000;
 const SYSCALL_FRAMEBUFFER_FLUSH: usize = 2001;
 const SYSCALL_EVENT_GET: usize = 3000;
@@ -40,6 +46,7 @@ mod net;
 mod process;
 mod sync;
 mod thread;
+mod tty;
 
 use fs::*;
 use gui::*;
@@ -48,6 +55,7 @@ use net::*;
 use process::*;
 use sync::*;
 use thread::*;
+use tty::*;
 
 pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
     match syscall_id {
@@ -63,7 +71,13 @@ pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
         SYSCALL_EXIT => sys_exit(args[0] as i32),
         SYSCALL_SLEEP => sys_sleep(args[0]),
         SYSCALL_YIELD => sys_yield(),
-        SYSCALL_KILL => sys_kill(args[0], args[1] as u32),
+        SYSCALL_KILL => sys_kill(args[0] as isize, args[1] as u32),
+        SYSCALL_SETPGID => sys_setpgid(args[0], args[1]),
+        SYSCALL_GETPGRP => sys_getpgrp(),
+        SYSCALL_TCSETPGRP => sys_tcsetpgrp(args[0], args[1]),
+        SYSCALL_TCGETPGRP => sys_tcgetpgrp(args[0]),
+        SYSCALL_TTY_CTL => sys_tty_ctl(args[0], args[1], args[2]),
+        SYSCALL_SIGACTION => sys_sigaction(args[0] as u32, args[1]),
         SYSCALL_GET_TIME => sys_get_time(),
         SYSCALL_GETPID => sys_getpid(),
         SYSCALL_FORK => sys_fork(),

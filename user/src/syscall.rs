@@ -28,6 +28,12 @@ const SYSCALL_SEMAPHORE_DOWN: usize = 1022;
 const SYSCALL_CONDVAR_CREATE: usize = 1030;
 const SYSCALL_CONDVAR_SIGNAL: usize = 1031;
 const SYSCALL_CONDVAR_WAIT: usize = 1032;
+const SYSCALL_SETPGID: usize = 1100;
+const SYSCALL_GETPGRP: usize = 1101;
+const SYSCALL_TCSETPGRP: usize = 1102;
+const SYSCALL_TCGETPGRP: usize = 1103;
+const SYSCALL_TTY_CTL: usize = 1104;
+const SYSCALL_SIGACTION: usize = 1105;
 const SYSCALL_FRAMEBUFFER: usize = 2000;
 const SYSCALL_FRAMEBUFFER_FLUSH: usize = 2001;
 const SYSCALL_EVENT_GET: usize = 3000;
@@ -176,6 +182,30 @@ pub fn sys_condvar_signal(condvar_id: usize) -> isize {
 
 pub fn sys_condvar_wait(condvar_id: usize, mutex_id: usize) -> isize {
     syscall(SYSCALL_CONDVAR_WAIT, [condvar_id, mutex_id, 0])
+}
+
+pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
+    syscall(SYSCALL_SETPGID, [pid, pgid, 0])
+}
+
+pub fn sys_getpgrp() -> isize {
+    syscall(SYSCALL_GETPGRP, [0, 0, 0])
+}
+
+pub fn sys_tcsetpgrp(fd: usize, pgrp: usize) -> isize {
+    syscall(SYSCALL_TCSETPGRP, [fd, pgrp, 0])
+}
+
+pub fn sys_tcgetpgrp(fd: usize) -> isize {
+    syscall(SYSCALL_TCGETPGRP, [fd, 0, 0])
+}
+
+pub fn sys_tty_ctl(fd: usize, cmd: usize, arg: usize) -> isize {
+    syscall(SYSCALL_TTY_CTL, [fd, cmd, arg])
+}
+
+pub fn sys_sigaction(signal: u32, act: usize) -> isize {
+    syscall(SYSCALL_SIGACTION, [signal as usize, act, 0])
 }
 
 pub fn sys_framebuffer() -> isize {

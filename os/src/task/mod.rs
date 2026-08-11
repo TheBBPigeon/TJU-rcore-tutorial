@@ -13,7 +13,7 @@ use crate::fs::{OpenFlags, open_file};
 use crate::sbi::shutdown;
 use alloc::{sync::Arc, vec::Vec};
 use lazy_static::*;
-use manager::fetch_task;
+use manager::{PID2PCB, fetch_task};
 use process::ProcessControlBlock;
 use switch::__switch;
 
@@ -163,4 +163,26 @@ pub fn current_add_signal(signal: SignalFlags) {
     let process = current_process();
     let mut process_inner = process.inner_exclusive_access();
     process_inner.signals |= signal;
+}
+
+/// Deliver a signal unless the process has explicitly ignored it.
+pub fn add_signal_to_process(process: &Arc<ProcessControlBlock>, signal: SignalFlags) {
+    let mut inner = process.inner_exclusive_access();
+    if !inner.sig_ignored.contains(signal) {
+        inner.signals |= signal;
+    }
+}
+
+/// Broadcast a signal to every process in the given process group.
+pub fn signal_process_group(pgrp: usize, signal: SignalFlags) {
+    let targets: Vec<Arc<ProcessControlBlock>> = {
+        let map = PID2PCB.exclusive_access();
+        map.iter()
+            .filter(|(_, p)| p.inner_exclusive_access().pgid == pgrp)
+            .map(|(_, p)| Arc::clone(p))
+            .collect()
+    };
+    for process in targets.iter() {
+        add_signal_to_process(process, signal);
+    }
 }
