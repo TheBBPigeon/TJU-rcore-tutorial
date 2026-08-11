@@ -17,6 +17,7 @@ pub trait Scheduler: Send {
     fn should_preempt(&mut self, current: &Arc<TaskControlBlock>, now: usize) -> bool;
 }
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum SchedulerPolicy {
     RoundRobin,
