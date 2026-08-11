@@ -35,6 +35,7 @@ DISASM ?= -x
 
 # Run usertests or usershell
 TEST ?=
+TEST_APP ?= usertests
 
 build: env $(KERNEL_BIN) fs-img 
 
@@ -48,7 +49,7 @@ $(KERNEL_BIN): kernel
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
 
 fs-img: $(APPS)
-	@cd ../user && make build TEST=$(TEST)
+	@cd ../user && make build TEST=$(TEST) TEST_APP=$(TEST_APP)
 	@rm -f $(FS_IMG)
 	@cd ../easy-fs-fuse && cargo run --release -- -s ../user/src/bin/ -t ../user/target/riscv64gc-unknown-none-elf/release/
 
