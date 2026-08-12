@@ -219,6 +219,7 @@ impl MemorySet {
             elf.header.pt2.entry_point() as usize,
         )
     }
+    #[allow(dead_code)]
     pub fn from_existed_user(user_space: &MemorySet) -> MemorySet {
         let mut memory_set = Self::new_bare();
         // map trampoline

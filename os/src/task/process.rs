@@ -192,9 +192,14 @@ impl ProcessControlBlock {
         // COW mappings in both address spaces; kernel-only pages such as the
         // trap context are still copied eagerly.
         let (memory_set, cow_stats) = MemorySet::from_existed_user_cow(&mut parent.memory_set);
+        let eager_frames = cow_stats.allocated_frames + cow_stats.shared_pages;
         println!(
-            "[cow] fork: shared={} copied={} newly_allocated={}",
-            cow_stats.shared_pages, cow_stats.copied_pages, cow_stats.allocated_frames,
+            "[cow] fork pages: eager={} cow={} saved={} shared={} copied={}",
+            eager_frames,
+            cow_stats.allocated_frames,
+            eager_frames - cow_stats.allocated_frames,
+            cow_stats.shared_pages,
+            cow_stats.copied_pages,
         );
         // alloc a pid
         let pid = pid_alloc();
