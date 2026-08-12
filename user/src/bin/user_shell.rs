@@ -14,12 +14,15 @@ use core::mem;
 
 use user_lib::{
     OpenFlags, SIG_IGN, TTY_CTL_SET_FLAGS, TTY_ISIG, close, dup, exec, fork, getpgrp, kill, open,
-    pipe, read, setpgid, sigaction, sleep, tcsetpgrp, tty_ctl, waitpid_nb, write,
+    pipe, read, setpgid, sigaction, sleep, tcsetpgrp, tty_ctl, waitpid_nb, waitpid_nb_opts, write,
 };
 
 const PROMPT: &str = ">> ";
 const MAX_HISTORY: usize = 100;
 const SIGINT_BITS: i32 = 1 << 2;
+const SIGTSTP_BITS: i32 = 1 << 20;
+const SIGCONT_BITS: i32 = 1 << 21;
+const WUNTRACED: usize = 1;
 const ESC: u8 = 0x1b;
 const CR: u8 = 0x0d;
 const LF: u8 = 0x0a;
@@ -29,7 +32,13 @@ const DEL: u8 = 0x7f;
 #[derive(Clone)]
 enum JobStatus {
     Running,
+    Stopped,
     Done(i32),
+}
+
+enum WaitResult {
+    Reaped(i32),
+    Stopped,
 }
 
 struct Job {
@@ -371,12 +380,14 @@ fn resolve_prog(cwd: &str, prog: &str) -> String {
     }
 }
 
-/// Wait for a foreground child without busy-spinning the CPU.
-fn wait_foreground(pid: usize, exit_code: &mut i32) {
+/// Wait for a foreground child without busy-spinning the CPU. Reports whether
+/// the child was reaped or stopped by SIGTSTP (WUNTRACED).
+fn wait_foreground(pid: usize, exit_code: &mut i32) -> WaitResult {
     loop {
-        match waitpid_nb(pid, exit_code) {
+        match waitpid_nb_opts(pid, exit_code, WUNTRACED) {
             -2 => sleep(2),
-            _ => return,
+            -3 => return WaitResult::Stopped,
+            _ => return WaitResult::Reaped(*exit_code),
         }
     }
 }
@@ -458,6 +469,19 @@ impl Shell {
             pids,
             cmdline: cmdline.to_string(),
             status: JobStatus::Running,
+        });
+    }
+
+    fn register_stopped_job(&mut self, pgid: usize, pids: Vec<usize>, cmdline: &str) {
+        let jid = self.next_jid;
+        self.next_jid += 1;
+        println!("[{}]+ Stopped {}", jid, cmdline);
+        self.jobs.push(Job {
+            jid,
+            pgid,
+            pids,
+            cmdline: cmdline.to_string(),
+            status: JobStatus::Stopped,
         });
     }
 
@@ -559,10 +583,18 @@ impl Shell {
         // foreground job: put it on the terminal and wait
         tcsetpgrp(0, pgid);
         let mut last_code = 0;
+        let mut stopped = false;
         for pid in children.iter() {
-            wait_foreground(*pid, &mut last_code);
+            match wait_foreground(*pid, &mut last_code) {
+                WaitResult::Reaped(code) => last_code = code,
+                WaitResult::Stopped => stopped = true,
+            }
         }
         tcsetpgrp(0, self.shell_pgrp);
+        if stopped {
+            self.register_stopped_job(pgid, children, &cmdline);
+            return;
+        }
         if last_code != 0 {
             println!("[shell] process exited with code {}", last_code);
         }
@@ -630,8 +662,9 @@ impl Shell {
     fn builtin_jobs(&mut self) {
         self.reap_jobs();
         for job in self.jobs.iter() {
-            let status = match job.status {
+            let status = match &job.status {
                 JobStatus::Running => "Running".to_string(),
+                JobStatus::Stopped => "Stopped".to_string(),
                 JobStatus::Done(code) => alloc::format!("Done({})", code),
             };
             println!("[{}] {} pgid={} {}", job.jid, status, job.pgid, job.cmdline);
@@ -656,14 +689,32 @@ impl Shell {
         let pgid = self.jobs[idx].pgid;
         let pids = self.jobs[idx].pids.clone();
         let cmdline = self.jobs[idx].cmdline.clone();
+        let jid = self.jobs[idx].jid;
+        if matches!(self.jobs[idx].status, JobStatus::Stopped) {
+            let encoded = (-(pgid as isize)) as usize;
+            if kill(encoded, SIGCONT_BITS) != 0 {
+                println!("fg: failed to continue job {}", jid);
+                return;
+            }
+            self.jobs[idx].status = JobStatus::Running;
+        }
         tcsetpgrp(0, pgid);
         let mut last_code = 0;
+        let mut stopped_again = false;
         for pid in pids.iter() {
-            wait_foreground(*pid, &mut last_code);
+            match wait_foreground(*pid, &mut last_code) {
+                WaitResult::Reaped(code) => last_code = code,
+                WaitResult::Stopped => stopped_again = true,
+            }
         }
         tcsetpgrp(0, self.shell_pgrp);
-        println!("[{}]+ Done {}", self.jobs[idx].jid, cmdline);
-        self.jobs.remove(idx);
+        if stopped_again {
+            println!("[{}]+ Stopped {}", jid, cmdline);
+            self.jobs[idx].status = JobStatus::Stopped;
+        } else {
+            println!("[{}]+ Done {}", jid, cmdline);
+            self.jobs.remove(idx);
+        }
     }
 
     fn builtin_bg(&mut self, args: &[String]) {
@@ -675,10 +726,23 @@ impl Shell {
             None => self.jobs.len().checked_sub(1),
         };
         match idx {
-            Some(idx) => match self.jobs[idx].status {
-                JobStatus::Running => println!("bg: job {} already running", self.jobs[idx].jid),
-                JobStatus::Done(_) => println!("bg: job {} already done", self.jobs[idx].jid),
-            },
+            Some(idx) => {
+                let jid = self.jobs[idx].jid;
+                match &self.jobs[idx].status {
+                    JobStatus::Running => println!("bg: job {} already running", jid),
+                    JobStatus::Stopped => {
+                        let pgid = self.jobs[idx].pgid;
+                        let encoded = (-(pgid as isize)) as usize;
+                        if kill(encoded, SIGCONT_BITS) != 0 {
+                            println!("bg: failed to continue job {}", jid);
+                            return;
+                        }
+                        self.jobs[idx].status = JobStatus::Running;
+                        println!("[{}] {}", jid, self.jobs[idx].cmdline);
+                    }
+                    JobStatus::Done(_) => println!("bg: job {} already done", jid),
+                }
+            }
             None => println!("bg: job not found"),
         }
     }
@@ -776,6 +840,7 @@ pub fn main() -> i32 {
     setpgid(0, 0);
     let shell_pgrp = getpgrp() as usize;
     sigaction(SIGINT_BITS, SIG_IGN);
+    sigaction(SIGTSTP_BITS, SIG_IGN);
     // raw mode, no kernel echo; keep Ctrl-C handling enabled
     tty_ctl(0, TTY_CTL_SET_FLAGS, TTY_ISIG);
     tcsetpgrp(0, shell_pgrp);

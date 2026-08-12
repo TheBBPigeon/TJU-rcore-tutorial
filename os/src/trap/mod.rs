@@ -3,8 +3,9 @@ mod context;
 use crate::config::TRAMPOLINE;
 use crate::syscall::syscall;
 use crate::task::{
-    SignalFlags, check_signals_of_current, current_add_signal, current_trap_cx,
-    current_trap_cx_user_va, current_user_token, exit_current_and_run_next,
+    SignalFlags, check_signals_of_current, check_stop_signal_of_current,
+    clear_cont_signal_of_current, current_add_signal, current_trap_cx, current_trap_cx_user_va,
+    current_user_token, exit_current_and_run_next, stop_current_and_run_next,
     suspend_current_and_run_next,
 };
 use crate::timer::{check_timer, set_next_trigger};
@@ -118,6 +119,11 @@ pub fn trap_handler() -> ! {
             );
         }
     }
+    // SIGTSTP stops the process; SIGCONT on a running process is a no-op.
+    if check_stop_signal_of_current() {
+        stop_current_and_run_next();
+    }
+    clear_cont_signal_of_current();
     // check signals
     if let Some((errno, msg)) = check_signals_of_current() {
         println!("[kernel] {}", msg);

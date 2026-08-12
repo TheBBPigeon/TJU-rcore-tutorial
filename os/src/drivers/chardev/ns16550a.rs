@@ -7,6 +7,8 @@ use alloc::collections::VecDeque;
 use bitflags::*;
 use volatile::{ReadOnly, Volatile, WriteOnly};
 
+const MAX_READ_BUFFER: usize = 4096;
+
 bitflags! {
     /// InterruptEnableRegister
     pub struct IER: u8 {
@@ -166,7 +168,9 @@ impl<const BASE_ADDR: usize> CharDevice for NS16550a<BASE_ADDR> {
         self.inner.exclusive_session(|inner| {
             while let Some(ch) = inner.ns16550a.read() {
                 count += 1;
-                inner.read_buffer.push_back(ch);
+                if inner.read_buffer.len() < MAX_READ_BUFFER {
+                    inner.read_buffer.push_back(ch);
+                }
             }
         });
         if count > 0 {

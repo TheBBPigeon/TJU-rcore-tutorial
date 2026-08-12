@@ -26,6 +26,7 @@ pub struct ProcessControlBlockInner {
     pub children: Vec<Arc<ProcessControlBlock>>,
     pub exit_code: i32,
     pub pgid: usize,
+    pub stopped: bool,
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
     pub signals: SignalFlags,
     pub sig_ignored: SignalFlags,
@@ -89,6 +90,7 @@ impl ProcessControlBlock {
                     children: Vec::new(),
                     exit_code: 0,
                     pgid: pid,
+                    stopped: false,
                     fd_table: vec![
                         // 0 -> stdin
                         Some(Arc::new(Stdin)),
@@ -149,6 +151,7 @@ impl ProcessControlBlock {
             // a fresh program starts with default signal dispositions
             inner.signals = SignalFlags::empty();
             inner.sig_ignored = SignalFlags::empty();
+            inner.stopped = false;
         }
         // then we alloc user resource for main thread again
         // since memory_set has been changed
@@ -223,6 +226,7 @@ impl ProcessControlBlock {
                     children: Vec::new(),
                     exit_code: 0,
                     pgid: parent.pgid,
+                    stopped: false,
                     fd_table: new_fd_table,
                     signals: SignalFlags::empty(),
                     sig_ignored: parent.sig_ignored,

@@ -77,4 +77,5 @@ pub enum TaskStatus {
     Ready,
     Running,
     Blocked,
+    Stopped,
 }

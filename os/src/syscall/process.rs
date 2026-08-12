@@ -2,13 +2,33 @@ use crate::DEV_NON_BLOCKING_ACCESS;
 use crate::fs::{OpenFlags, open_file};
 use crate::mm::{translated_ref, translated_refmut, translated_str};
 use crate::task::{
-    SignalFlags, add_signal_to_process, current_process, current_task, current_user_token,
-    exit_current_and_run_next, pid2process, signal_process_group, suspend_current_and_run_next,
+    SignalFlags, add_signal_to_process, continue_process, continue_process_group, current_pgrp,
+    current_process, current_task, current_user_token, exit_current_and_run_next, pid2process,
+    signal_process_group, suspend_current_and_run_next,
 };
 use crate::timer::get_time_ms;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+const WUNTRACED: usize = 1;
+
+/// Temporarily switch the block device to synchronous reads and restore it on
+/// drop (including unwinding).
+struct SyncBlockReadGuard;
+
+impl SyncBlockReadGuard {
+    fn enter() -> Self {
+        *DEV_NON_BLOCKING_ACCESS.exclusive_access() = false;
+        Self
+    }
+}
+
+impl Drop for SyncBlockReadGuard {
+    fn drop(&mut self) {
+        *DEV_NON_BLOCKING_ACCESS.exclusive_access() = true;
+    }
+}
 
 pub fn sys_exit(exit_code: i32) -> ! {
     exit_current_and_run_next(exit_code);
@@ -59,10 +79,10 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
     // Load the ELF with synchronous block reads. The easy-fs layer holds
     // spin locks across blocking I/O, so an asynchronous read here can
     // deadlock when two pipeline children call exec concurrently.
-    *DEV_NON_BLOCKING_ACCESS.exclusive_access() = false;
+    let _guard = SyncBlockReadGuard::enter();
     let app_inode = open_file(path.as_str(), OpenFlags::RDONLY);
     let all_data = app_inode.as_ref().map(|inode| inode.read_all());
-    *DEV_NON_BLOCKING_ACCESS.exclusive_access() = true;
+    drop(_guard);
     if let Some(all_data) = all_data {
         let process = current_process();
         let argc = args_vec.len();
@@ -76,7 +96,8 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
 
 /// If there is not a child process whose pid is same as given, return -1.
 /// Else if there is a child process but it is still running, return -2.
-pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
+/// With `WUNTRACED`, return -3 when a child is stopped but not reaped.
+pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32, options: usize) -> isize {
     let process = current_process();
     // find a child process
 
@@ -88,6 +109,13 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
     {
         return -1;
         // ---- release current PCB
+    }
+    if options & WUNTRACED != 0
+        && inner.children.iter().any(|p| {
+            p.inner_exclusive_access().stopped && (pid == -1 || pid as usize == p.getpid())
+        })
+    {
+        return -3;
     }
     let pair = inner.children.iter().enumerate().find(|(_, p)| {
         // ++++ temporarily access child PCB exclusively
@@ -115,7 +143,22 @@ pub fn sys_kill(pid: isize, signal: u32) -> isize {
         Some(flag) => flag,
         None => return -1,
     };
-    if pid > 0 {
+    if flag == SignalFlags::SIGCONT {
+        if pid > 0 {
+            if let Some(process) = pid2process(pid as usize) {
+                continue_process(process);
+                0
+            } else {
+                -1
+            }
+        } else if pid < 0 {
+            continue_process_group((-pid) as usize);
+            0
+        } else {
+            continue_process_group(current_pgrp());
+            0
+        }
+    } else if pid > 0 {
         if let Some(process) = pid2process(pid as usize) {
             add_signal_to_process(&process, flag);
             0
@@ -138,6 +181,17 @@ pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
     let current = current_process();
     let target_pid = if pid == 0 { current.getpid() } else { pid };
     if let Some(process) = pid2process(target_pid) {
+        let is_self = target_pid == current.getpid();
+        let is_child = process
+            .inner_exclusive_access()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .map(|p| Arc::ptr_eq(&p, &current))
+            .unwrap_or(false);
+        if !is_self && !is_child {
+            return -1;
+        }
         let mut inner = process.inner_exclusive_access();
         inner.pgid = if pgid == 0 { target_pid } else { pgid };
         0
@@ -152,6 +206,9 @@ pub fn sys_getpgrp() -> isize {
 }
 
 pub fn sys_tcsetpgrp(_fd: usize, pgrp: usize) -> isize {
+    if pgrp == 0 || pid2process(pgrp).is_none() {
+        return -1;
+    }
     crate::tty::TTY.set_fg_pgrp(pgrp);
     0
 }

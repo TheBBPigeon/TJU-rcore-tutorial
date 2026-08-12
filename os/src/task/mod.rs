@@ -169,6 +169,85 @@ pub fn current_pgrp() -> usize {
     current_process().inner_exclusive_access().pgid
 }
 
+/// Returns true when the current process has a pending, non-ignored SIGTSTP.
+/// The flag is consumed here; the caller must then stop the process.
+pub fn check_stop_signal_of_current() -> bool {
+    let process = current_process();
+    let mut inner = process.inner_exclusive_access();
+    if inner.sig_ignored.contains(SignalFlags::SIGTSTP) {
+        inner.signals.remove(SignalFlags::SIGTSTP);
+        return false;
+    }
+    if inner.signals.contains(SignalFlags::SIGTSTP) {
+        inner.signals.remove(SignalFlags::SIGTSTP);
+        inner.stopped = true;
+        true
+    } else {
+        false
+    }
+}
+
+/// Clear a SIGCONT that was delivered to a process which is not stopped.
+pub fn clear_cont_signal_of_current() {
+    current_process()
+        .inner_exclusive_access()
+        .signals
+        .remove(SignalFlags::SIGCONT);
+}
+
+/// Stop the current process: mark all of its tasks as Stopped and leave the
+/// ready queue. The task resumes from this point when SIGCONT is delivered.
+pub fn stop_current_and_run_next() {
+    let task = take_current_task().unwrap();
+    let process = task.process.upgrade().unwrap();
+    let task_cx_ptr = {
+        let mut task_inner = task.inner_exclusive_access();
+        task_inner.task_status = TaskStatus::Stopped;
+        &mut task_inner.task_cx as *mut TaskContext
+    };
+    {
+        let mut inner = process.inner_exclusive_access();
+        inner.stopped = true;
+    }
+    drop(process);
+    schedule(task_cx_ptr);
+}
+
+/// Resume one stopped process.
+pub fn continue_process(process: Arc<ProcessControlBlock>) {
+    let tasks: Vec<Arc<TaskControlBlock>> = {
+        let mut inner = process.inner_exclusive_access();
+        if !inner.stopped {
+            return;
+        }
+        inner.stopped = false;
+        inner.signals.remove(SignalFlags::SIGCONT);
+        inner.tasks.iter().flatten().cloned().collect()
+    };
+    for task in tasks {
+        let mut task_inner = task.inner_exclusive_access();
+        if task_inner.task_status == TaskStatus::Stopped {
+            task_inner.task_status = TaskStatus::Ready;
+            drop(task_inner);
+            add_task(task);
+        }
+    }
+}
+
+/// Resume every stopped process in the given process group.
+pub fn continue_process_group(pgrp: usize) {
+    let targets: Vec<Arc<ProcessControlBlock>> = {
+        let map = PID2PCB.exclusive_access();
+        map.iter()
+            .filter(|(_, p)| p.inner_exclusive_access().pgid == pgrp)
+            .map(|(_, p)| Arc::clone(p))
+            .collect()
+    };
+    for process in targets {
+        continue_process(process);
+    }
+}
+
 /// Deliver a signal unless the process has explicitly ignored it.
 pub fn add_signal_to_process(process: &Arc<ProcessControlBlock>, signal: SignalFlags) {
     let mut inner = process.inner_exclusive_access();

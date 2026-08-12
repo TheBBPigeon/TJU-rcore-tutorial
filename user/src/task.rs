@@ -47,6 +47,10 @@ pub fn waitpid_nb(pid: usize, exit_code: &mut i32) -> isize {
     sys_waitpid(pid as isize, exit_code as *mut _)
 }
 
+pub fn waitpid_nb_opts(pid: usize, exit_code: &mut i32, options: usize) -> isize {
+    sys_waitpid_opts(pid as isize, exit_code as *mut _, options)
+}
+
 bitflags! {
     pub struct SignalFlags: i32 {
         const SIGINT    = 1 << 2;
@@ -54,6 +58,8 @@ bitflags! {
         const SIGABRT   = 1 << 6;
         const SIGFPE    = 1 << 8;
         const SIGSEGV   = 1 << 11;
+        const SIGTSTP   = 1 << 20;
+        const SIGCONT   = 1 << 21;
     }
 }
 

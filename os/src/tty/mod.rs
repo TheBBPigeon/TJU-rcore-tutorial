@@ -16,6 +16,7 @@ pub const TTY_CTL_SET_FLAGS: usize = 2;
 
 const CTRL_C: u8 = 0x03;
 const CTRL_D: u8 = 0x04;
+const CTRL_Z: u8 = 0x1a;
 const LF: u8 = 0x0a;
 const CR: u8 = 0x0d;
 const BS: u8 = 0x08;
@@ -45,13 +46,23 @@ impl TtyInner {
     /// Feed one byte into the line discipline. Returns a signal to raise
     /// (e.g. Ctrl-C) when the byte must not be delivered as input.
     fn push_byte(&mut self, ch: u8) -> Option<SignalFlags> {
-        if self.flags & TTY_ISIG != 0 && ch == CTRL_C {
-            UART.write(b'^');
-            UART.write(b'C');
-            UART.write(CR);
-            UART.write(LF);
-            self.line.clear();
-            return Some(SignalFlags::SIGINT);
+        if self.flags & TTY_ISIG != 0 {
+            if ch == CTRL_C {
+                UART.write(b'^');
+                UART.write(b'C');
+                UART.write(CR);
+                UART.write(LF);
+                self.line.clear();
+                return Some(SignalFlags::SIGINT);
+            }
+            if ch == CTRL_Z {
+                UART.write(b'^');
+                UART.write(b'Z');
+                UART.write(CR);
+                UART.write(LF);
+                self.line.clear();
+                return Some(SignalFlags::SIGTSTP);
+            }
         }
         if self.flags & TTY_ICANON != 0 {
             match ch {
