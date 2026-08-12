@@ -38,6 +38,18 @@ unsafe extern "Rust" {
 
 const USER_HEAP_SIZE: usize = 32768;
 
+pub const PROT_READ: usize = 1 << 0;
+pub const PROT_WRITE: usize = 1 << 1;
+pub const PROT_EXEC: usize = 1 << 2;
+
+pub fn mmap(start: usize, len: usize, prot: usize) -> isize {
+    sys_mmap(start, len, prot)
+}
+
+pub fn munmap(start: usize, len: usize) -> isize {
+    sys_munmap(start, len)
+}
+
 static mut HEAP_SPACE: [u8; USER_HEAP_SIZE] = [0; USER_HEAP_SIZE];
 
 #[global_allocator]

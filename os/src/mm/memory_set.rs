@@ -46,6 +46,119 @@ pub struct CowForkStats {
 }
 
 impl MemorySet {
+    const MMAP_BASE: usize = 0x2000_0000;
+    const MMAP_END: usize = 0x3000_0000;
+    fn area_conflicts(&self, start: usize, end: usize) -> bool {
+        self.areas.iter().any(|area| {
+            let area_start: usize = VirtAddr::from(area.vpn_range.get_start()).into();
+
+            let area_end: usize = VirtAddr::from(area.vpn_range.get_end()).into();
+
+            start < area_end && area_start < end
+        })
+    }
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> Option<usize> {
+        // 长度必须大于 0，只允许低三位权限。
+        if len == 0 || prot & !0x7 != 0 {
+            return None;
+        }
+
+        // 向上按页对齐，同时防止 usize 溢出。
+        let len = len.checked_add(PAGE_SIZE - 1)? & !(PAGE_SIZE - 1);
+
+        let mut permission = MapPermission::U;
+
+        if prot & 0x1 != 0 {
+            permission |= MapPermission::R;
+        }
+
+        if prot & 0x2 != 0 {
+            /*
+             * RISC-V 中 W=1、R=0 是保留的无效叶子页组合，
+             * 所以可写映射也必须可读。
+             */
+            permission |= MapPermission::R | MapPermission::W;
+        }
+
+        if prot & 0x4 != 0 {
+            permission |= MapPermission::X;
+        }
+
+        // 至少需要可读或可执行。
+        if !permission.intersects(MapPermission::R | MapPermission::X) {
+            return None;
+        }
+
+        let chosen = if start != 0 {
+            // 指定地址必须页对齐。
+            if start % PAGE_SIZE != 0 {
+                return None;
+            }
+
+            let end = start.checked_add(len)?;
+
+            if start < Self::MMAP_BASE || end > Self::MMAP_END || self.area_conflicts(start, end) {
+                return None;
+            }
+
+            start
+        } else {
+            // 自动选址：从 MMAP_BASE 开始逐页尝试。
+            let mut candidate = Self::MMAP_BASE;
+
+            loop {
+                let end = candidate.checked_add(len)?;
+
+                if end > Self::MMAP_END {
+                    return None;
+                }
+
+                if !self.area_conflicts(candidate, end) {
+                    break candidate;
+                }
+
+                candidate = candidate.checked_add(PAGE_SIZE)?;
+            }
+        };
+
+        self.insert_framed_area(chosen.into(), (chosen + len).into(), permission);
+
+        Some(chosen)
+    }
+    pub fn munmap(&mut self, start: usize, len: usize) -> bool {
+        if start % PAGE_SIZE != 0 || len == 0 || len % PAGE_SIZE != 0 {
+            return false;
+        }
+
+        let end = match start.checked_add(len) {
+            Some(end) => end,
+            None => return false,
+        };
+
+        let start_vpn = VirtAddr::from(start).floor();
+        let end_vpn = VirtAddr::from(end).floor();
+
+        let index = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == start_vpn
+                && area.vpn_range.get_end() == end_vpn
+                && area.map_type == MapType::Framed
+                && area.map_perm.contains(MapPermission::U)
+        });
+
+        if let Some(index) = index {
+            let mut area = self.areas.remove(index);
+
+            area.unmap(&mut self.page_table);
+
+            unsafe {
+                asm!("sfence.vma");
+            }
+
+            true
+        } else {
+            false
+        }
+    }
     pub fn new_bare() -> Self {
         Self {
             page_table: PageTable::new(),
