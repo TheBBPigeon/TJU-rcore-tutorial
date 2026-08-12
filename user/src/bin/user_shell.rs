@@ -14,7 +14,7 @@ use core::mem;
 
 use user_lib::{
     OpenFlags, SIG_IGN, TTY_CTL_SET_FLAGS, TTY_ISIG, close, dup, exec, fork, getpgrp, kill, open,
-    pipe, read, setpgid, sigaction, tcsetpgrp, tty_ctl, waitpid, waitpid_nb, write,
+    pipe, read, setpgid, sigaction, sleep, tcsetpgrp, tty_ctl, waitpid_nb, write,
 };
 
 const PROMPT: &str = ">> ";
@@ -371,6 +371,16 @@ fn resolve_prog(cwd: &str, prog: &str) -> String {
     }
 }
 
+/// Wait for a foreground child without busy-spinning the CPU.
+fn wait_foreground(pid: usize, exit_code: &mut i32) {
+    loop {
+        match waitpid_nb(pid, exit_code) {
+            -2 => sleep(2),
+            _ => return,
+        }
+    }
+}
+
 struct Shell {
     cwd: String,
     history: VecDeque<String>,
@@ -524,6 +534,8 @@ impl Shell {
                 let mut args_addr: Vec<*const u8> = args_nul.iter().map(|s| s.as_ptr()).collect();
                 args_addr.push(core::ptr::null());
                 if exec(path.as_str(), args_addr.as_slice()) == -1 {
+                    let msg = alloc::format!("shell: command not found: {}\n", stage.prog);
+                    write(2, msg.as_bytes());
                     user_lib::exit(127);
                 }
                 unreachable!();
@@ -548,7 +560,7 @@ impl Shell {
         tcsetpgrp(0, pgid);
         let mut last_code = 0;
         for pid in children.iter() {
-            waitpid(*pid, &mut last_code);
+            wait_foreground(*pid, &mut last_code);
         }
         tcsetpgrp(0, self.shell_pgrp);
         if last_code != 0 {
@@ -647,7 +659,7 @@ impl Shell {
         tcsetpgrp(0, pgid);
         let mut last_code = 0;
         for pid in pids.iter() {
-            waitpid(*pid, &mut last_code);
+            wait_foreground(*pid, &mut last_code);
         }
         tcsetpgrp(0, self.shell_pgrp);
         println!("[{}]+ Done {}", self.jobs[idx].jid, cmdline);

@@ -1,7 +1,7 @@
 use crate::drivers::chardev::{CharDevice, UART};
 use crate::mm::UserBuffer;
 use crate::sync::{Condvar, UPIntrFreeCell};
-use crate::task::{SignalFlags, current_add_signal, schedule, signal_process_group};
+use crate::task::{SignalFlags, current_add_signal, current_pgrp, schedule, signal_process_group};
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -46,6 +46,11 @@ impl TtyInner {
     /// (e.g. Ctrl-C) when the byte must not be delivered as input.
     fn push_byte(&mut self, ch: u8) -> Option<SignalFlags> {
         if self.flags & TTY_ISIG != 0 && ch == CTRL_C {
+            UART.write(b'^');
+            UART.write(b'C');
+            UART.write(CR);
+            UART.write(LF);
+            self.line.clear();
             return Some(SignalFlags::SIGINT);
         }
         if self.flags & TTY_ICANON != 0 {
@@ -66,6 +71,10 @@ impl TtyInner {
                 CTRL_D => {
                     if self.line.is_empty() {
                         self.eof = true;
+                    } else {
+                        // POSIX-like: Ctrl-D on a partial line flushes what
+                        // has been typed so far.
+                        self.lines.push_back(core::mem::take(&mut self.line));
                     }
                 }
                 _ => {
@@ -113,14 +122,19 @@ impl Tty {
         let mut buf_iter = user_buf.into_iter();
         loop {
             let mut inner = self.inner.exclusive_access();
+            // Only the foreground process group may read from the terminal;
+            // background readers get EOF so they cannot steal interactive input.
+            if inner.fg_pgrp != 0 && current_pgrp() != inner.fg_pgrp {
+                return 0;
+            }
             if inner.flags & TTY_ICANON != 0 {
                 if let Some(mut line) = inner.lines.pop_front() {
                     let n = line.len().min(want);
-                    for _ in 0..n {
-                        unsafe { *buf_iter.next().unwrap() = line.remove(0) };
+                    for i in 0..n {
+                        unsafe { *buf_iter.next().unwrap() = line[i] };
                     }
-                    if !line.is_empty() {
-                        inner.lines.push_front(line);
+                    if n < line.len() {
+                        inner.lines.push_front(line.split_off(n));
                     }
                     return n;
                 }

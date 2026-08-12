@@ -131,6 +131,9 @@ UART 硬件 --> 串口驱动(IRQ→环形缓冲+Condvar) --> TTY 行规程(raw/c
 - 已完成：M0 分支与基线、M1 内核 TTY、M2 进程组/信号、M3 Shell 重构、M4 作业控制。
 - 已验证（QEMU 实测）：行编辑、历史、内建命令、管道（含 `echo | cmd`）、重定向、
   后台任务、jobs/fg、Ctrl-C 终止前台任务、tty_test/pgid_test/sigint_test。
+- A 组优化（已实现）：exec 失败错误提示到 stderr、前台等待/后台回收改为休眠轮询、
+  TTY 行读取去掉 O(n²)、Ctrl-D 部分行立即返回、Ctrl-C 回显 `^C`、后台进程读终端
+  返回 EOF 防止抢输入。
 - 未实现（后续增强）：SIGTSTP/SIGCONT 停止恢复、`>>`、`2>`、`&&`/`||`、
   历史持久化、Tab 补全；`cd/pwd` 目前为 Shell 侧字符串维护，待成员3的
   `chdir/getcwd` 合入后对接。

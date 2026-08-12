@@ -165,6 +165,10 @@ pub fn current_add_signal(signal: SignalFlags) {
     process_inner.signals |= signal;
 }
 
+pub fn current_pgrp() -> usize {
+    current_process().inner_exclusive_access().pgid
+}
+
 /// Deliver a signal unless the process has explicitly ignored it.
 pub fn add_signal_to_process(process: &Arc<ProcessControlBlock>, signal: SignalFlags) {
     let mut inner = process.inner_exclusive_access();
