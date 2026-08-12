@@ -1,4 +1,4 @@
-use crate::fs::{OpenFlags, make_pipe, open_file};
+use crate::fs::{OpenFlags, list_app_names, make_pipe, open_file};
 use crate::mm::{UserBuffer, translated_byte_buffer, translated_refmut, translated_str};
 use crate::task::{current_process, current_user_token};
 use alloc::sync::Arc;
@@ -96,4 +96,26 @@ pub fn sys_dup(fd: usize) -> isize {
     let new_fd = inner.alloc_fd();
     inner.fd_table[new_fd] = Some(Arc::clone(inner.fd_table[fd].as_ref().unwrap()));
     new_fd as isize
+}
+
+/// Fill `buf` with NUL-separated application names; returns bytes written.
+pub fn sys_list_apps(buf: *mut u8, len: usize) -> isize {
+    let token = current_user_token();
+    let names = list_app_names();
+    let mut written = 0usize;
+    for name in names.iter() {
+        let mut data = name.as_bytes().to_vec();
+        data.push(0);
+        if written + data.len() > len {
+            break;
+        }
+        let mut copied = 0usize;
+        for chunk in translated_byte_buffer(token, unsafe { buf.add(written) }, data.len()) {
+            let n = chunk.len().min(data.len() - copied);
+            chunk[..n].copy_from_slice(&data[copied..copied + n]);
+            copied += n;
+        }
+        written += data.len();
+    }
+    written as isize
 }

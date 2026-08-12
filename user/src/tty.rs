@@ -1,4 +1,6 @@
 use super::syscall::*;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 pub const TTY_ECHO: usize = 1;
 pub const TTY_ICANON: usize = 2;
@@ -32,4 +34,26 @@ pub fn tty_ctl(fd: usize, cmd: usize, arg: usize) -> isize {
 
 pub fn sigaction(signal: i32, act: usize) -> isize {
     sys_sigaction(signal as u32, act)
+}
+
+/// List application names on the root file system (NUL-separated).
+pub fn list_apps() -> Vec<String> {
+    let mut buf = [0u8; 4096];
+    let n = sys_list_apps(buf.as_mut_ptr(), buf.len());
+    if n <= 0 {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    let mut cur = Vec::new();
+    for &b in &buf[..n as usize] {
+        if b == 0 {
+            if !cur.is_empty() {
+                names.push(String::from_utf8_lossy(&cur).into_owned());
+                cur.clear();
+            }
+        } else {
+            cur.push(b);
+        }
+    }
+    names
 }

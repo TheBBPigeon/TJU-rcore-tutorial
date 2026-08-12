@@ -34,6 +34,7 @@ const SYSCALL_TCSETPGRP: usize = 1102;
 const SYSCALL_TCGETPGRP: usize = 1103;
 const SYSCALL_TTY_CTL: usize = 1104;
 const SYSCALL_SIGACTION: usize = 1105;
+const SYSCALL_LIST_APPS: usize = 1106;
 const SYSCALL_FRAMEBUFFER: usize = 2000;
 const SYSCALL_FRAMEBUFFER_FLUSH: usize = 2001;
 const SYSCALL_EVENT_GET: usize = 3000;
@@ -210,6 +211,10 @@ pub fn sys_tty_ctl(fd: usize, cmd: usize, arg: usize) -> isize {
 
 pub fn sys_sigaction(signal: u32, act: usize) -> isize {
     syscall(SYSCALL_SIGACTION, [signal as usize, act, 0])
+}
+
+pub fn sys_list_apps(buf: *mut u8, len: usize) -> isize {
+    syscall(SYSCALL_LIST_APPS, [buf as usize, len, 0])
 }
 
 pub fn sys_framebuffer() -> isize {

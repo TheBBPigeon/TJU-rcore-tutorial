@@ -97,3 +97,18 @@ Shell 空闲时按 Ctrl-C 不退出（Shell 忽略 SIGINT 且在独立进程组�
 ```
 
 `pgid_test` 验证 fork 后 `setpgid` 生效；`sigint_test` 前台运行时按 Ctrl-C 应被杀死（返回码 -2）。
+
+## 8. 高级特性演示
+
+```text
+>> echo a > f ; echo b >> f ; cat f        # 追加重定向
+>> nosuchcmd 2> err.txt ; cat err.txt      # stderr 重定向
+>> echo ok && echo yes                     # 条件执行
+>> nosuchcmd || echo fallback
+>> infloop &
+>> kill -INT 3                             # 按信号名杀进程
+>> hel<Tab>                                # Tab 补全（多候选会列出）
+>> history -c                              # 清空历史
+```
+
+Delete 键（`ESC [ 3 ~`）删除光标处字符，Ctrl-W 删除光标前一个单词。

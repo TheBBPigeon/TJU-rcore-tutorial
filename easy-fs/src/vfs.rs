@@ -161,6 +161,10 @@ impl Inode {
         self.read_disk_inode(|disk_inode| disk_inode.read_at(offset, buf, &self.block_device))
     }
 
+    pub fn size(&self) -> u32 {
+        self.read_disk_inode(|disk_inode| disk_inode.size)
+    }
+
     pub fn write_at(&self, offset: usize, buf: &[u8]) -> usize {
         let mut fs = self.fs.lock();
         let size = self.modify_disk_inode(|disk_inode| {

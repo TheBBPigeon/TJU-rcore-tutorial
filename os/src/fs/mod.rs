@@ -11,6 +11,6 @@ pub trait File: Send + Sync {
     fn write(&self, buf: UserBuffer) -> usize;
 }
 
-pub use inode::{OpenFlags, list_apps, open_file};
+pub use inode::{OpenFlags, list_app_names, list_apps, open_file};
 pub use pipe::make_pipe;
 pub use stdio::{Stdin, Stdout};

@@ -34,6 +34,7 @@ const SYSCALL_TCSETPGRP: usize = 1102;
 const SYSCALL_TCGETPGRP: usize = 1103;
 const SYSCALL_TTY_CTL: usize = 1104;
 const SYSCALL_SIGACTION: usize = 1105;
+const SYSCALL_LIST_APPS: usize = 1106;
 const SYSCALL_FRAMEBUFFER: usize = 2000;
 const SYSCALL_FRAMEBUFFER_FLUSH: usize = 2001;
 const SYSCALL_EVENT_GET: usize = 3000;
@@ -78,6 +79,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
         SYSCALL_TCGETPGRP => sys_tcgetpgrp(args[0]),
         SYSCALL_TTY_CTL => sys_tty_ctl(args[0], args[1], args[2]),
         SYSCALL_SIGACTION => sys_sigaction(args[0] as u32, args[1]),
+        SYSCALL_LIST_APPS => sys_list_apps(args[0] as *mut u8, args[1]),
         SYSCALL_GET_TIME => sys_get_time(),
         SYSCALL_GETPID => sys_getpid(),
         SYSCALL_FORK => sys_fork(),

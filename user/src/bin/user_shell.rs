@@ -13,8 +13,9 @@ use alloc::vec::Vec;
 use core::mem;
 
 use user_lib::{
-    OpenFlags, SIG_IGN, TTY_CTL_SET_FLAGS, TTY_ISIG, close, dup, exec, fork, getpgrp, kill, open,
-    pipe, read, setpgid, sigaction, sleep, tcsetpgrp, tty_ctl, waitpid_nb, waitpid_nb_opts, write,
+    OpenFlags, SIG_IGN, TTY_CTL_SET_FLAGS, TTY_ISIG, close, dup, exec, fork, getpgrp, kill,
+    list_apps, open, pipe, read, setpgid, sigaction, sleep, tcsetpgrp, tty_ctl, waitpid_nb,
+    waitpid_nb_opts, write,
 };
 
 const PROMPT: &str = ">> ";
@@ -55,11 +56,21 @@ struct Stage {
     args: Vec<String>,
     input: Option<String>,
     output: Option<String>,
+    stderr: Option<String>,
+    append: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Connector {
+    None,
+    And,
+    Or,
 }
 
 struct Command {
     stages: Vec<Stage>,
     background: bool,
+    connector: Connector,
 }
 
 struct LineEditor {
@@ -67,15 +78,17 @@ struct LineEditor {
     cursor: usize,
     history: VecDeque<Vec<u8>>,
     hist_idx: Option<usize>,
+    app_names: Vec<String>,
 }
 
 impl LineEditor {
-    fn new() -> Self {
+    fn new(app_names: Vec<String>) -> Self {
         Self {
             buf: Vec::new(),
             cursor: 0,
             history: VecDeque::new(),
             hist_idx: None,
+            app_names,
         }
     }
 
@@ -134,6 +147,65 @@ impl LineEditor {
     fn kill_to_end(&mut self) {
         self.buf.truncate(self.cursor);
         self.refresh();
+    }
+
+    fn delete_char(&mut self) {
+        if self.cursor < self.buf.len() {
+            self.buf.remove(self.cursor);
+            self.refresh();
+        }
+    }
+
+    fn delete_word(&mut self) {
+        while self.cursor > 0 && self.buf[self.cursor - 1].is_ascii_whitespace() {
+            self.buf.remove(self.cursor - 1);
+            self.cursor -= 1;
+        }
+        while self.cursor > 0 && !self.buf[self.cursor - 1].is_ascii_whitespace() {
+            self.buf.remove(self.cursor - 1);
+            self.cursor -= 1;
+        }
+        self.refresh();
+    }
+
+    fn complete(&mut self) {
+        let start = self.buf[..self.cursor]
+            .iter()
+            .rposition(|&b| b == b' ' || b == b'|' || b == b'<')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let prefix = String::from_utf8_lossy(&self.buf[start..self.cursor]).into_owned();
+        let mut matches: Vec<String> = self
+            .app_names
+            .iter()
+            .filter(|n| n.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for b in [
+            "cd", "pwd", "echo", "exit", "history", "jobs", "fg", "bg", "kill", "help", "clear",
+        ] {
+            if b.starts_with(&prefix) && !matches.iter().any(|m| m == b) {
+                matches.push(b.to_string());
+            }
+        }
+        if matches.is_empty() {
+            return;
+        }
+        if matches.len() == 1 {
+            let name = matches[0].clone();
+            self.buf.splice(start..self.cursor, name.bytes());
+            self.cursor = start + name.len();
+            self.buf.insert(self.cursor, b' ');
+            self.cursor += 1;
+            self.refresh();
+        } else {
+            println!("");
+            for m in matches.iter() {
+                print!("{}  ", m);
+            }
+            println!("");
+            self.refresh();
+        }
     }
 
     fn history_prev(&mut self) {
@@ -208,6 +280,8 @@ impl LineEditor {
                 0x05 => self.end(),         // Ctrl-E
                 0x15 => self.kill_line(),   // Ctrl-U
                 0x0b => self.kill_to_end(), // Ctrl-K
+                0x17 => self.delete_word(), // Ctrl-W
+                b'\t' => self.complete(),
                 0x04 => {
                     if self.buf.is_empty() {
                         write(1, b"\r\n");
@@ -229,6 +303,13 @@ impl LineEditor {
                         b'D' => self.move_left(),
                         b'H' => self.home(),
                         b'F' => self.end(),
+                        b'3' => {
+                            let mut end = [0u8; 1];
+                            if read(0, &mut end) <= 0 || end[0] != b'~' {
+                                continue;
+                            }
+                            self.delete_char();
+                        }
                         _ => {}
                     }
                 }
@@ -244,7 +325,8 @@ fn tokenize(input: &str) -> Result<Vec<String>, &'static str> {
     let mut cur = String::new();
     let mut quote: Option<char> = None;
     let mut escaped = false;
-    for c in input.chars() {
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
         if escaped {
             cur.push(c);
             escaped = false;
@@ -260,6 +342,21 @@ fn tokenize(input: &str) -> Result<Vec<String>, &'static str> {
             } else {
                 cur.push(c);
             }
+            continue;
+        }
+        let two_char_op = match c {
+            '&' if chars.peek() == Some(&'&') => Some("&&"),
+            '|' if chars.peek() == Some(&'|') => Some("||"),
+            '>' if chars.peek() == Some(&'>') => Some(">>"),
+            '2' if chars.peek() == Some(&'>') => Some("2>"),
+            _ => None,
+        };
+        if let Some(op) = two_char_op {
+            if !cur.is_empty() {
+                tokens.push(mem::take(&mut cur));
+            }
+            tokens.push(op.to_string());
+            chars.next();
             continue;
         }
         match c {
@@ -301,10 +398,11 @@ fn parse_command(input: &str) -> Result<Vec<Command>, &'static str> {
     let mut stages: Vec<Stage> = Vec::new();
     let mut stage = Stage::default();
     let mut background = false;
+    let mut pending = Connector::None;
     let mut i = 0;
     while i < tokens.len() {
         match tokens[i].as_str() {
-            ";" | "&" => {
+            ";" | "&" | "&&" | "||" => {
                 finish_stage(&mut stages, &mut stage)?;
                 if tokens[i] == "&" {
                     background = true;
@@ -312,25 +410,38 @@ fn parse_command(input: &str) -> Result<Vec<Command>, &'static str> {
                 commands.push(Command {
                     stages: mem::take(&mut stages),
                     background,
+                    connector: pending,
                 });
                 background = false;
                 stage = Stage::default();
+                pending = match tokens[i].as_str() {
+                    "&&" => Connector::And,
+                    "||" => Connector::Or,
+                    _ => Connector::None,
+                };
             }
             "|" => {
                 finish_stage(&mut stages, &mut stage)?;
             }
-            "<" | ">" => {
+            "<" | ">" | ">>" | "2>" => {
                 i += 1;
                 if i >= tokens.len() {
                     return Err("missing file for redirection");
                 }
-                if tokens[i - 1] == "<" {
-                    stage.input = Some(tokens[i].clone());
-                } else {
-                    stage.output = Some(tokens[i].clone());
+                match tokens[i - 1].as_str() {
+                    "<" => stage.input = Some(tokens[i].clone()),
+                    ">" => {
+                        stage.output = Some(tokens[i].clone());
+                        stage.append = false;
+                    }
+                    ">>" => {
+                        stage.output = Some(tokens[i].clone());
+                        stage.append = true;
+                    }
+                    "2>" => stage.stderr = Some(tokens[i].clone()),
+                    _ => unreachable!(),
                 }
             }
-            "&&" | "||" => return Err("&& and || are not supported"),
             _ => {
                 if stage.prog.is_empty() {
                     stage.prog = tokens[i].clone();
@@ -345,7 +456,11 @@ fn parse_command(input: &str) -> Result<Vec<Command>, &'static str> {
         finish_stage(&mut stages, &mut stage)?;
     }
     if !stages.is_empty() {
-        commands.push(Command { stages, background });
+        commands.push(Command {
+            stages,
+            background,
+            connector: pending,
+        });
     }
     Ok(commands)
 }
@@ -398,6 +513,7 @@ struct Shell {
     jobs: Vec<Job>,
     next_jid: usize,
     shell_pgrp: usize,
+    history_cleared: bool,
 }
 
 impl Shell {
@@ -408,6 +524,7 @@ impl Shell {
             jobs: Vec::new(),
             next_jid: 1,
             shell_pgrp,
+            history_cleared: false,
         }
     }
 
@@ -485,7 +602,7 @@ impl Shell {
         });
     }
 
-    fn run_pipeline(&mut self, cmd: &Command) {
+    fn run_pipeline(&mut self, cmd: &Command) -> i32 {
         let stages = &cmd.stages;
         let n = stages.len();
         let mut pipes: Vec<[usize; 2]> = Vec::new();
@@ -520,7 +637,11 @@ impl Shell {
                 }
                 if let Some(path) = &stage.output {
                     let path = nul(path);
-                    let fd = open(path.as_str(), OpenFlags::CREATE | OpenFlags::WRONLY);
+                    let mut flags = OpenFlags::CREATE | OpenFlags::WRONLY;
+                    if stage.append {
+                        flags |= OpenFlags::APPEND;
+                    }
+                    let fd = open(path.as_str(), flags);
                     if fd == -1 {
                         println!("shell: cannot open {}", path);
                         user_lib::exit(1);
@@ -528,6 +649,18 @@ impl Shell {
                     let fd = fd as usize;
                     close(1);
                     assert_eq!(dup(fd), 1);
+                    close(fd);
+                }
+                if let Some(path) = &stage.stderr {
+                    let path = nul(path);
+                    let fd = open(path.as_str(), OpenFlags::CREATE | OpenFlags::WRONLY);
+                    if fd == -1 {
+                        println!("shell: cannot open {}", path);
+                        user_lib::exit(1);
+                    }
+                    let fd = fd as usize;
+                    close(2);
+                    assert_eq!(dup(fd), 2);
                     close(fd);
                 }
                 // pipeline fds
@@ -578,7 +711,7 @@ impl Shell {
         let cmdline = command_string(cmd);
         if cmd.background {
             self.register_job(pgid, children, &cmdline, true);
-            return;
+            return 0;
         }
         // foreground job: put it on the terminal and wait
         tcsetpgrp(0, pgid);
@@ -593,29 +726,30 @@ impl Shell {
         tcsetpgrp(0, self.shell_pgrp);
         if stopped {
             self.register_stopped_job(pgid, children, &cmdline);
-            return;
+            return 1;
         }
         if last_code != 0 {
             println!("[shell] process exited with code {}", last_code);
         }
+        last_code
     }
 
     fn is_pipeline_builtin(&self, prog: &str) -> bool {
         matches!(prog, "echo" | "pwd" | "history" | "help" | "clear")
     }
 
-    fn run_pipeline_builtin(&self, stage: &Stage) {
+    fn run_pipeline_builtin(&mut self, stage: &Stage) {
         match stage.prog.as_str() {
-            "echo" => self.builtin_echo(&stage.args, &stage.output),
+            "echo" => self.builtin_echo(&stage.args, &stage.output, stage.append),
             "pwd" => self.builtin_pwd(),
-            "history" => self.builtin_history(),
+            "history" => self.builtin_history(&[]),
             "help" => self.builtin_help(),
             "clear" => self.builtin_clear(),
             _ => {}
         }
     }
 
-    fn builtin_echo(&self, args: &[String], output: &Option<String>) {
+    fn builtin_echo(&self, args: &[String], output: &Option<String>, append: bool) {
         let mut s = String::new();
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
@@ -625,12 +759,17 @@ impl Shell {
         }
         if let Some(path) = output {
             let path = nul(path);
-            let fd = open(path.as_str(), OpenFlags::CREATE | OpenFlags::WRONLY);
+            let mut flags = OpenFlags::CREATE | OpenFlags::WRONLY;
+            if append {
+                flags |= OpenFlags::APPEND;
+            }
+            let fd = open(path.as_str(), flags);
             if fd == -1 {
                 println!("shell: cannot open {}", path);
                 return;
             }
             write(fd as usize, s.as_bytes());
+            write(fd as usize, b"\n");
             close(fd as usize);
         } else {
             println!("{}", s);
@@ -653,7 +792,12 @@ impl Shell {
         }
     }
 
-    fn builtin_history(&self) {
+    fn builtin_history(&mut self, args: &[String]) {
+        if args.first().map(|s| s.as_str()) == Some("-c") {
+            self.history.clear();
+            self.history_cleared = true;
+            return;
+        }
         for (i, line) in self.history.iter().enumerate() {
             println!("{:>4}  {}", i + 1, line);
         }
@@ -749,18 +893,44 @@ impl Shell {
 
     fn builtin_kill(&self, args: &[String]) {
         if args.is_empty() {
-            println!("kill: usage: kill <pid | -pgid>");
+            println!("kill: usage: kill [-SIG] <pid | -pgid>");
             return;
         }
-        let arg = &args[0];
+        let mut signal = SIGINT_BITS;
+        let mut target = 0usize;
+        if let Some(name) = args[0].strip_prefix('-') {
+            if !name.is_empty() && name.chars().all(|c| c.is_ascii_digit()) {
+                target = 0;
+            } else {
+                signal = match name.to_ascii_uppercase().as_str() {
+                    "INT" => SIGINT_BITS,
+                    "TSTP" => SIGTSTP_BITS,
+                    "CONT" => SIGCONT_BITS,
+                    "ABRT" => 1 << 6,
+                    "ILL" => 1 << 4,
+                    "FPE" => 1 << 8,
+                    "SEGV" => 1 << 11,
+                    _ => {
+                        println!("kill: unknown signal {}", name);
+                        return;
+                    }
+                };
+                target = 1;
+            }
+        }
+        if target >= args.len() {
+            println!("kill: usage: kill [-SIG] <pid | -pgid>");
+            return;
+        }
+        let arg = &args[target];
         if let Some(pid) = arg.strip_prefix('-').and_then(|s| s.parse::<usize>().ok()) {
             let encoded = (-(pid as isize)) as usize;
-            let ret = kill(encoded, SIGINT_BITS);
+            let ret = kill(encoded, signal);
             if ret != 0 {
                 println!("kill: no such process group {}", pid);
             }
         } else if let Ok(pid) = arg.parse::<usize>() {
-            let ret = kill(pid, SIGINT_BITS);
+            let ret = kill(pid, signal);
             if ret != 0 {
                 println!("kill: no such process {}", pid);
             }
@@ -769,38 +939,67 @@ impl Shell {
         }
     }
 
-    fn execute(&mut self, cmd: &Command) {
+    fn execute(&mut self, cmd: &Command) -> i32 {
         if cmd.stages.len() == 1 {
             let stage = &cmd.stages[0];
             if stage.prog == "exit" {
                 user_lib::exit(0);
             }
-            let builtin = match stage.prog.as_str() {
-                "echo" => Some(self.builtin_echo(&stage.args, &stage.output)),
-                "cd" => Some(self.builtin_cd(&stage.args)),
-                "pwd" => Some(self.builtin_pwd()),
-                "history" => Some(self.builtin_history()),
-                "jobs" => Some(self.builtin_jobs()),
-                "fg" => Some(self.builtin_fg(&stage.args)),
-                "bg" => Some(self.builtin_bg(&stage.args)),
-                "kill" => Some(self.builtin_kill(&stage.args)),
-                "help" => Some(self.builtin_help()),
-                "clear" => Some(self.builtin_clear()),
+            let handled: Option<i32> = match stage.prog.as_str() {
+                "echo" => {
+                    self.builtin_echo(&stage.args, &stage.output, stage.append);
+                    Some(0)
+                }
+                "cd" => {
+                    self.builtin_cd(&stage.args);
+                    Some(0)
+                }
+                "pwd" => {
+                    self.builtin_pwd();
+                    Some(0)
+                }
+                "history" => {
+                    self.builtin_history(&stage.args);
+                    Some(0)
+                }
+                "jobs" => {
+                    self.builtin_jobs();
+                    Some(0)
+                }
+                "fg" => {
+                    self.builtin_fg(&stage.args);
+                    Some(0)
+                }
+                "bg" => {
+                    self.builtin_bg(&stage.args);
+                    Some(0)
+                }
+                "kill" => {
+                    self.builtin_kill(&stage.args);
+                    Some(0)
+                }
+                "help" => {
+                    self.builtin_help();
+                    Some(0)
+                }
+                "clear" => {
+                    self.builtin_clear();
+                    Some(0)
+                }
                 _ => None,
             };
-            if builtin.is_some() {
-                if cmd.background {
-                    // builtins run synchronously in the shell
-                }
-                return;
+            if let Some(code) = handled {
+                return code;
             }
         }
-        self.run_pipeline(cmd);
+        self.run_pipeline(cmd)
     }
 
     fn builtin_help(&self) {
         println!("builtins: cd pwd echo history jobs fg bg kill help clear exit");
-        println!("syntax: cmd [args] [< file] [> file] [| cmd ...] [&] [; cmd]");
+        println!(
+            "syntax: cmd [args] [< file] [> file] [>> file] [2> file] [| cmd] [&] [;] [&&] [||]"
+        );
     }
 
     fn builtin_clear(&self) {
@@ -846,7 +1045,7 @@ pub fn main() -> i32 {
     tcsetpgrp(0, shell_pgrp);
 
     let mut shell = Shell::new(shell_pgrp);
-    let mut editor = LineEditor::new();
+    let mut editor = LineEditor::new(list_apps());
     loop {
         // child programs may change TTY flags (e.g. tty_test); always restore
         // the shell's raw editing mode before reading the next command
@@ -865,11 +1064,22 @@ pub fn main() -> i32 {
         editor.add_history(line.as_bytes());
         match parse_command(&line) {
             Ok(commands) => {
+                let mut prev_status = 0i32;
                 for cmd in commands {
-                    shell.execute(&cmd);
+                    match cmd.connector {
+                        Connector::None => prev_status = shell.execute(&cmd),
+                        Connector::And if prev_status == 0 => prev_status = shell.execute(&cmd),
+                        Connector::And => {}
+                        Connector::Or if prev_status != 0 => prev_status = shell.execute(&cmd),
+                        Connector::Or => {}
+                    }
                 }
             }
             Err(e) => println!("shell: {}", e),
+        }
+        if shell.history_cleared {
+            editor.history.clear();
+            shell.history_cleared = false;
         }
     }
     println!("exit");

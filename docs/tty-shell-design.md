@@ -137,8 +137,11 @@ UART 硬件 --> 串口驱动(IRQ→环形缓冲+Condvar) --> TTY 行规程(raw/c
 - B 组优化（已实现）：SIGTSTP/SIGCONT 停止/恢复（Ctrl-Z 停止前台作业，`bg`/`fg`
   恢复）、waitpid 支持 WUNTRACED（停止状态返回 -3）、setpgid/tcsetpgrp 权限校验、
   UART 输入缓冲上限、exec 同步读盘 RAII guard。
-- 未实现（后续增强）：`>>`、`2>`、`&&`/`||`、
-  历史持久化、Tab 补全；`cd/pwd` 目前为 Shell 侧字符串维护，待成员3的
+- C 组优化（已实现）：`>>` 追加重定向、`2>` 错误重定向、`&&`/`||` 条件执行、
+  `kill -SIG`（INT/TSTP/CONT 等）、Delete 键、Ctrl-W 删词、`history -c`、
+  Tab 补全（文件系统应用名 + 内建命令）。
+- 未实现（后续增强）：
+  历史持久化；`cd/pwd` 目前为 Shell 侧字符串维护，待成员3的
   `chdir/getcwd` 合入后对接；阻塞式 waitpid 未实现，当前用 `waitpid_nb + sleep`
   轮询替代。
 - 环境修复：bootloader 升级为 RustSBI 0.3.1（QEMU 11 需要）；exec 加载 ELF

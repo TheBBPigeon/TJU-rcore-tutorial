@@ -2,6 +2,7 @@ use super::File;
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPIntrFreeCell;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -20,11 +21,12 @@ pub struct OSInodeInner {
 }
 
 impl OSInode {
-    pub fn new(readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
+    pub fn new(readable: bool, writable: bool, inode: Arc<Inode>, append: bool) -> Self {
+        let offset = if append { inode.size() as usize } else { 0 };
         Self {
             readable,
             writable,
-            inner: unsafe { UPIntrFreeCell::new(OSInodeInner { offset: 0, inode }) },
+            inner: unsafe { UPIntrFreeCell::new(OSInodeInner { offset, inode }) },
         }
     }
     pub fn read_all(&self) -> Vec<u8> {
@@ -65,6 +67,7 @@ bitflags! {
         const RDWR = 1 << 1;
         const CREATE = 1 << 9;
         const TRUNC = 1 << 10;
+        const APPEND = 1 << 14;
     }
 }
 
@@ -84,25 +87,32 @@ impl OpenFlags {
 
 pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     let (readable, writable) = flags.read_write();
+    let append = flags.contains(OpenFlags::APPEND);
     if flags.contains(OpenFlags::CREATE) {
         if let Some(inode) = ROOT_INODE.find(name) {
-            // clear size
-            inode.clear();
-            Some(Arc::new(OSInode::new(readable, writable, inode)))
+            if !append {
+                // clear size
+                inode.clear();
+            }
+            Some(Arc::new(OSInode::new(readable, writable, inode, append)))
         } else {
             // create file
             ROOT_INODE
                 .create(name)
-                .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
+                .map(|inode| Arc::new(OSInode::new(readable, writable, inode, append)))
         }
     } else {
         ROOT_INODE.find(name).map(|inode| {
             if flags.contains(OpenFlags::TRUNC) {
                 inode.clear();
             }
-            Arc::new(OSInode::new(readable, writable, inode))
+            Arc::new(OSInode::new(readable, writable, inode, append))
         })
     }
+}
+
+pub fn list_app_names() -> Vec<String> {
+    ROOT_INODE.ls()
 }
 
 impl File for OSInode {
