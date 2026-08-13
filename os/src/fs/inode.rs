@@ -1,7 +1,7 @@
 use super::File;
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
-use crate::sync::UPIntrFreeCell;
+use crate::sync::{Mutex, MutexBlocking, UPIntrFreeCell};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -27,23 +27,42 @@ impl OSInode {
             inner: unsafe { UPIntrFreeCell::new(OSInodeInner { offset: 0, inode }) },
         }
     }
+
     pub fn read_all(&self) -> Vec<u8> {
-        let mut inner = self.inner.exclusive_access();
-        let mut buffer = [0u8; 512];
-        let mut v: Vec<u8> = Vec::new();
-        loop {
-            let len = inner.inode.read_at(inner.offset, &mut buffer);
-            if len == 0 {
-                break;
+        FILE_SYSTEM_LOCK.lock();
+
+        let result = {
+            let mut inner = self.inner.exclusive_access();
+            let mut buffer = [0u8; 512];
+            let mut data = Vec::new();
+
+            loop {
+                let len = inner.inode.read_at(inner.offset, &mut buffer);
+                if len == 0 {
+                    break;
+                }
+                inner.offset += len;
+                data.extend_from_slice(&buffer[..len]);
             }
-            inner.offset += len;
-            v.extend_from_slice(&buffer[..len]);
-        }
-        v
+
+            data
+        };
+
+        FILE_SYSTEM_LOCK.unlock();
+        result
     }
 }
 
 lazy_static! {
+    /// easy-fs 内部使用同步自旋锁，而 VirtIO 块设备 I/O 可能阻塞并切换任务。
+    ///
+    /// 如果两个进程并发访问 easy-fs，第一个任务可能持有 easy-fs 锁等待设备，
+    /// 第二个任务则在单核 CPU 上自旋等待同一把锁，使第一个任务无法恢复运行。
+    ///
+    /// 这里使用任务级阻塞互斥锁，把所有 easy-fs 操作串行化。等待锁的任务会
+    /// 进入 Blocked 状态，而不是在单核 CPU 上持续自旋。
+    static ref FILE_SYSTEM_LOCK: MutexBlocking = MutexBlocking::new();
+
     pub static ref ROOT_INODE: Arc<Inode> = {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
@@ -51,8 +70,14 @@ lazy_static! {
 }
 
 pub fn list_apps() {
+    FILE_SYSTEM_LOCK.lock();
+
+    let apps = ROOT_INODE.ls();
+
+    FILE_SYSTEM_LOCK.unlock();
+
     println!("/**** APPS ****");
-    for app in ROOT_INODE.ls() {
+    for app in apps {
         println!("{}", app);
     }
     println!("**************/")
@@ -69,8 +94,7 @@ bitflags! {
 }
 
 impl OpenFlags {
-    /// Do not check validity for simplicity
-    /// Return (readable, writable)
+    /// Return (readable, writable).
     pub fn read_write(&self) -> (bool, bool) {
         if self.is_empty() {
             (true, false)
@@ -83,14 +107,15 @@ impl OpenFlags {
 }
 
 pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
+    FILE_SYSTEM_LOCK.lock();
+
     let (readable, writable) = flags.read_write();
-    if flags.contains(OpenFlags::CREATE) {
+
+    let result = if flags.contains(OpenFlags::CREATE) {
         if let Some(inode) = ROOT_INODE.find(name) {
-            // clear size
             inode.clear();
             Some(Arc::new(OSInode::new(readable, writable, inode)))
         } else {
-            // create file
             ROOT_INODE
                 .create(name)
                 .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
@@ -102,38 +127,62 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
             }
             Arc::new(OSInode::new(readable, writable, inode))
         })
-    }
+    };
+
+    FILE_SYSTEM_LOCK.unlock();
+    result
 }
 
 impl File for OSInode {
     fn readable(&self) -> bool {
         self.readable
     }
+
     fn writable(&self) -> bool {
         self.writable
     }
+
     fn read(&self, mut buf: UserBuffer) -> usize {
-        let mut inner = self.inner.exclusive_access();
-        let mut total_read_size = 0usize;
-        for slice in buf.buffers.iter_mut() {
-            let read_size = inner.inode.read_at(inner.offset, *slice);
-            if read_size == 0 {
-                break;
+        FILE_SYSTEM_LOCK.lock();
+
+        let result = {
+            let mut inner = self.inner.exclusive_access();
+            let mut total_read_size = 0usize;
+
+            for slice in buf.buffers.iter_mut() {
+                let read_size = inner.inode.read_at(inner.offset, *slice);
+                if read_size == 0 {
+                    break;
+                }
+                inner.offset += read_size;
+                total_read_size += read_size;
             }
-            inner.offset += read_size;
-            total_read_size += read_size;
-        }
-        total_read_size
+
+            total_read_size
+        };
+
+        FILE_SYSTEM_LOCK.unlock();
+        result
     }
+
     fn write(&self, buf: UserBuffer) -> usize {
-        let mut inner = self.inner.exclusive_access();
-        let mut total_write_size = 0usize;
-        for slice in buf.buffers.iter() {
-            let write_size = inner.inode.write_at(inner.offset, *slice);
-            assert_eq!(write_size, slice.len());
-            inner.offset += write_size;
-            total_write_size += write_size;
-        }
-        total_write_size
+        FILE_SYSTEM_LOCK.lock();
+
+        let result = {
+            let mut inner = self.inner.exclusive_access();
+            let mut total_write_size = 0usize;
+
+            for slice in buf.buffers.iter() {
+                let write_size = inner.inode.write_at(inner.offset, *slice);
+                assert_eq!(write_size, slice.len());
+                inner.offset += write_size;
+                total_write_size += write_size;
+            }
+
+            total_write_size
+        };
+
+        FILE_SYSTEM_LOCK.unlock();
+        result
     }
 }
