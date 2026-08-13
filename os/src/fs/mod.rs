@@ -12,8 +12,8 @@ pub trait File: Send + Sync {
 }
 
 pub use inode::{
-    OpenFlags, get_root_inode, list_apps, list_directory_at, lookup_path_from,
-    make_directory_at, open_file, open_file_at, rename_at, unlink_at,
+    OpenFlags, get_root_inode, list_apps, lookup_path_from, make_directory_at, normalize_path,
+    open_file, open_file_at, rename_at, unlink_at,
 };
 pub use pipe::make_pipe;
 pub use stdio::{Stdin, Stdout};

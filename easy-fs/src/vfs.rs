@@ -96,7 +96,7 @@ impl Inode {
     /// Create a new inode of the specified type (File or Directory) in this directory.
     pub fn create_as(&self, name: &str, inode_type: DiskInodeType) -> Option<Arc<Inode>> {
         // Reject reserved names
-        if name == "." || name == ".." {
+        if name.is_empty() || name == "." || name == ".." {
             return None;
         }
         // Compute parent inode number BEFORE acquiring the fs lock,
@@ -273,6 +273,22 @@ impl Inode {
         self.inode_number() == 0
     }
 
+    /// Return the parent inode, or None if this is the root.
+    pub fn parent(&self) -> Option<Arc<Inode>> {
+        let parent_id = self.read_disk_inode(|disk_inode| disk_inode.parent_inode);
+        if parent_id == 0 && self.is_root() {
+            return None;
+        }
+        let fs = self.fs.lock();
+        let (block_id, block_offset) = fs.get_disk_inode_pos(parent_id);
+        Some(Arc::new(Self::new(
+            block_id,
+            block_offset,
+            self.fs.clone(),
+            self.block_device.clone(),
+        )))
+    }
+
     /// Check if this inode is a directory.
     pub fn is_dir(&self) -> bool {
         self.read_disk_inode(|disk_inode| disk_inode.is_dir())
@@ -378,7 +394,7 @@ impl Inode {
     /// Link an existing inode into this directory with the given name.
     /// Returns false if the name already exists.
     pub fn link(&self, name: &str, target_inode_id: u32) -> bool {
-        if name == "." || name == ".." {
+        if name.is_empty() || name == "." || name == ".." {
             return false;
         }
         let mut fs = self.fs.lock();
@@ -402,7 +418,7 @@ impl Inode {
     /// Rename a directory entry within the same directory.
     /// Returns true on success, false if old_name doesn't exist or new_name already exists.
     pub fn rename(&self, old_name: &str, new_name: &str) -> bool {
-        if old_name == "." || old_name == ".." || new_name == "." || new_name == ".." {
+        if old_name.is_empty() || old_name == "." || old_name == ".." || new_name.is_empty() || new_name == "." || new_name == ".." {
             return false;
         }
         let mut fs = self.fs.lock();
@@ -439,10 +455,9 @@ impl Inode {
     /// Remove a directory entry from this directory without deallocating
     /// the target inode. Used by rename/move operations. Returns true on success.
     pub fn detach(&self, name: &str) -> bool {
-        if name == "." || name == ".." {
+        if name.is_empty() || name == "." || name == ".." {
             return false;
         }
-        let mut fs = self.fs.lock();
         let result = self.modify_disk_inode(|disk_inode| {
             self.remove_directory_entry(name, disk_inode)
         });
@@ -456,7 +471,7 @@ impl Inode {
     /// Returns Some(inode_number) of the removed entry, or None if not found.
     pub fn unlink(&self, name: &str) -> Option<u32> {
         // Reject reserved names
-        if name == "." || name == ".." {
+        if name.is_empty() || name == "." || name == ".." {
             return None;
         }
         // Step 1: Find the target inode WITHOUT holding this directory's fs lock.

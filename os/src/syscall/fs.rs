@@ -1,11 +1,12 @@
 use crate::fs::{
-    OpenFlags, make_directory_at, make_pipe, open_file_at, rename_at, unlink_at,
-    lookup_path_from, get_root_inode,
+    OpenFlags, get_root_inode, lookup_path_from, make_directory_at, make_pipe, normalize_path,
+    open_file_at, rename_at, unlink_at,
 };
 use crate::mm::{UserBuffer, translated_byte_buffer, translated_refmut, translated_str};
 use crate::task::{current_process, current_user_token};
 use alloc::string::String;
 use alloc::sync::Arc;
+use easy_fs::Inode;
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     let token = current_user_token();
@@ -52,11 +53,7 @@ pub fn sys_open(path: *const u8, flags: u32) -> isize {
     let token = current_user_token();
     let path = translated_str(token, path);
     let flags = OpenFlags::from_bits(flags).unwrap();
-    let root = if path.starts_with('/') {
-        get_root_inode()
-    } else {
-        process.inner_exclusive_access().get_working_directory()
-    };
+    let root = resolve_root(path.as_str());
     if let Some(inode) = open_file_at(&root, path.as_str(), flags) {
         let mut inner = process.inner_exclusive_access();
         let fd = inner.alloc_fd();
@@ -112,12 +109,7 @@ pub fn sys_dup(fd: usize) -> isize {
 pub fn sys_mkdir(path: *const u8) -> isize {
     let token = current_user_token();
     let path = translated_str(token, path);
-    let process = current_process();
-    let root = if path.starts_with('/') {
-        get_root_inode()
-    } else {
-        process.inner_exclusive_access().get_working_directory()
-    };
+    let root = resolve_root(path.as_str());
     make_directory_at(&root, path.as_str())
 }
 
@@ -125,12 +117,7 @@ pub fn sys_mkdir(path: *const u8) -> isize {
 pub fn sys_unlink(path: *const u8) -> isize {
     let token = current_user_token();
     let path = translated_str(token, path);
-    let process = current_process();
-    let root = if path.starts_with('/') {
-        get_root_inode()
-    } else {
-        process.inner_exclusive_access().get_working_directory()
-    };
+    let root = resolve_root(path.as_str());
     unlink_at(&root, path.as_str())
 }
 
@@ -148,26 +135,13 @@ pub fn sys_rename(old_path: *const u8, new_path: *const u8) -> isize {
     rename_at(&root, old_path.as_str(), new_path.as_str())
 }
 
-/// Normalize a path by removing "." and empty components.
-fn normalize_path(path: &str) -> String {
-    let mut result = String::new();
-    for component in path.split('/') {
-        match component {
-            "" | "." => {}
-            _ => {
-                if !result.is_empty() {
-                    result.push('/');
-                }
-                result.push_str(component);
-            }
-        }
-    }
-    if result.is_empty() {
-        String::from("/")
-    } else if path.starts_with('/') {
-        String::from("/") + &result
+/// Resolve the base inode for a path: absolute paths use ROOT_INODE,
+/// relative paths use the process's current working directory.
+fn resolve_root(path: &str) -> Arc<Inode> {
+    if path.starts_with('/') {
+        get_root_inode()
     } else {
-        result
+        current_process().inner_exclusive_access().get_working_directory()
     }
 }
 
@@ -177,16 +151,8 @@ pub fn sys_chdir(path: *const u8) -> isize {
     let path = translated_str(token, path);
     let process = current_process();
 
-    let (old_path, root) = {
-        let inner = process.inner_exclusive_access();
-        let old_p = inner.get_working_directory_path();
-        let root_inode = if path.starts_with('/') {
-            get_root_inode()
-        } else {
-            inner.get_working_directory()
-        };
-        (old_p, root_inode)
-    };
+    let old_path = process.inner_exclusive_access().get_working_directory_path();
+    let root = resolve_root(path.as_str());
 
     match lookup_path_from(&root, path.as_str()) {
         Some(new_inode) => {
@@ -252,12 +218,7 @@ pub fn sys_getcwd(buf: *mut u8, len: usize) -> isize {
 pub fn sys_getdents(path: *const u8, buf: *mut u8, len: usize) -> isize {
     let token = current_user_token();
     let path_str = translated_str(token, path);
-    let process = current_process();
-    let root = if path_str.starts_with('/') {
-        get_root_inode()
-    } else {
-        process.inner_exclusive_access().get_working_directory()
-    };
+    let root = resolve_root(path_str.as_str());
     let dir = if path_str.is_empty() || path_str == "/" {
         root.clone()
     } else {

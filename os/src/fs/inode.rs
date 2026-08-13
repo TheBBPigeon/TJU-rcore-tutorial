@@ -99,6 +99,35 @@ fn split_path(path: &str) -> (&str, &str) {
     }
 }
 
+/// Normalize a path by resolving "." and ".." components and collapsing
+/// duplicate slashes. The result has no "." or ".." and no empty components.
+pub fn normalize_path(path: &str) -> String {
+    let mut components: Vec<&str> = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                components.pop();
+            }
+            _ => components.push(component),
+        }
+    }
+    let mut result = String::new();
+    for (i, comp) in components.iter().enumerate() {
+        if i > 0 {
+            result.push('/');
+        }
+        result.push_str(comp);
+    }
+    if result.is_empty() {
+        String::from("/")
+    } else if path.starts_with('/') {
+        String::from("/") + &result
+    } else {
+        result
+    }
+}
+
 /// Look up a path starting from a given root inode.
 pub fn lookup_path_from(root: &Arc<Inode>, path: &str) -> Option<Arc<Inode>> {
     root.lookup_path(path)
@@ -180,7 +209,7 @@ pub fn unlink_at(root: &Arc<Inode>, path: &str) -> isize {
 /// Rename/move a file or directory. Handles both same-directory rename
 /// and cross-directory move. Returns 0 on success, -1 on failure.
 pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
-    let (old_parent_path, mut old_name) = split_path(old_path);
+    let (old_parent_path, old_name) = split_path(old_path);
     let (new_parent_path, mut new_name) = split_path(new_path);
 
     // If target ends with '/', use the source name (mv a dir/ -> mv a dir/a)
@@ -225,6 +254,21 @@ pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
     };
     let source_id = source_inode.inode_number();
 
+    // Cycle detection: refuse to move a directory into its own subtree
+    // (which would make it unreachable and create a parent cycle).
+    if source_inode.is_dir() {
+        let mut ancestor = new_parent.clone();
+        loop {
+            if ancestor.inode_number() == source_id {
+                return -1;
+            }
+            match ancestor.parent() {
+                Some(p) => ancestor = p,
+                None => break,
+            }
+        }
+    }
+
     // Link into new directory
     if !new_parent.link(new_name, source_id) {
         return -1;
@@ -237,19 +281,6 @@ pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
     // Detach from old directory (keep inode and data intact)
     old_parent.detach(old_name);
     0
-}
-
-/// List the contents of a directory at a given path relative to a root inode.
-pub fn list_directory_at(root: &Arc<Inode>, path: &str) -> Option<Vec<String>> {
-    let dir = if path.is_empty() || path == "/" {
-        root.clone()
-    } else {
-        lookup_path_from(root, path)?
-    };
-    if !dir.is_dir() {
-        return None;
-    }
-    Some(dir.ls())
 }
 
 /// Open a file using CWD-aware path resolution.

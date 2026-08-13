@@ -67,10 +67,18 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
     } else {
         // Bare command name: search PATH
         let path_var = process.inner_exclusive_access().get_path_variable();
-        let root = get_root_inode();
         let mut found = None;
         for dir in path_var.split(':') {
+            if dir.is_empty() {
+                continue;
+            }
             let full_path = String::from(dir) + "/" + &path;
+            // Relative PATH entries resolve from CWD; absolute from ROOT_INODE.
+            let root = if dir.starts_with('/') {
+                get_root_inode()
+            } else {
+                process.inner_exclusive_access().get_working_directory()
+            };
             if let Some(inode) = open_file_at(&root, full_path.as_str(), OpenFlags::RDONLY) {
                 found = Some(inode);
                 break;
