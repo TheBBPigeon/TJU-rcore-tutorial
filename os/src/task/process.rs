@@ -236,8 +236,10 @@ impl ProcessControlBlock {
             .inner_exclusive_access()
             .sched_info
             .base_priority;
-        // clone parent's memory_set completely including trampoline/ustacks/trap_cxs
-        let memory_set = MemorySet::from_existed_user(&parent.memory_set);
+        // Share user pages with the child via COW: writable pages become
+        // read-only COW mappings in both address spaces; kernel-only pages
+        // (trap context, user stack) are still copied eagerly.
+        let memory_set = MemorySet::from_existed_user_cow(&mut parent.memory_set);
         // alloc a pid
         let pid = pid_alloc();
         // copy fd table

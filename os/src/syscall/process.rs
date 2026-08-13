@@ -87,6 +87,28 @@ pub fn sys_getpid() -> isize {
     current_task().unwrap().process.upgrade().unwrap().getpid() as isize
 }
 
+pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
+    let process = current_process();
+    let mut inner = process.inner_exclusive_access();
+
+    inner
+        .memory_set
+        .mmap(start, len, prot)
+        .map(|address| address as isize)
+        .unwrap_or(-1)
+}
+
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    let process = current_process();
+    let mut inner = process.inner_exclusive_access();
+
+    if inner.memory_set.munmap(start, len) {
+        0
+    } else {
+        -1
+    }
+}
+
 pub fn sys_fork() -> isize {
     let current_process = current_process();
     let new_process = current_process.fork();
@@ -187,6 +209,12 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
         // ++++ release child PCB
     });
     if let Some((idx, _)) = pair {
+        if !inner
+            .memory_set
+            .ensure_private_range((exit_code_ptr as usize).into(), core::mem::size_of::<i32>())
+        {
+            return -1;
+        }
         let child = inner.children.remove(idx);
         // confirm that child will be deallocated after being removed from children list
         assert_eq!(Arc::strong_count(&child), 1);

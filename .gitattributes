@@ -1,0 +1,4 @@
+# Binary assets must never undergo line-ending conversion
+*.bin binary
+*.bmp binary
+*.png binary

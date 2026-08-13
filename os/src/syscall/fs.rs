@@ -28,9 +28,8 @@ pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
 }
 
 pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
-    let token = current_user_token();
     let process = current_process();
-    let inner = process.inner_exclusive_access();
+    let mut inner = process.inner_exclusive_access();
     if fd >= inner.fd_table.len() {
         return -1;
     }
@@ -39,6 +38,13 @@ pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
         if !file.readable() {
             return -1;
         }
+        if !inner
+            .memory_set
+            .ensure_private_range((buf as usize).into(), len)
+        {
+            return -1;
+        }
+        let token = inner.memory_set.token();
         drop(inner);
         file.read(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize
     } else {
@@ -79,8 +85,14 @@ pub fn sys_close(fd: usize) -> isize {
 
 pub fn sys_pipe(pipe: *mut usize) -> isize {
     let process = current_process();
-    let token = current_user_token();
     let mut inner = process.inner_exclusive_access();
+    if !inner
+        .memory_set
+        .ensure_private_range((pipe as usize).into(), 2 * core::mem::size_of::<usize>())
+    {
+        return -1;
+    }
+    let token = inner.memory_set.token();
     let (pipe_read, pipe_write) = make_pipe();
     let read_fd = inner.alloc_fd();
     inner.fd_table[read_fd] = Some(pipe_read);
@@ -196,13 +208,16 @@ pub fn sys_chdir(path: *const u8) -> isize {
 
 /// Get the current working directory path.
 pub fn sys_getcwd(buf: *mut u8, len: usize) -> isize {
-    let token = current_user_token();
     let process = current_process();
-    let inner = process.inner_exclusive_access();
+    let mut inner = process.inner_exclusive_access();
     let cwd_path = inner.get_working_directory_path();
+    let write_len = core::cmp::min(cwd_path.len(), len);
+    if !inner.memory_set.ensure_private_range((buf as usize).into(), write_len) {
+        return -1;
+    }
+    let token = inner.memory_set.token();
     drop(inner);
     let path_bytes = cwd_path.as_bytes();
-    let write_len = core::cmp::min(path_bytes.len(), len);
     let mut buffers = translated_byte_buffer(token, buf, write_len);
     let mut offset = 0;
     for slice in buffers.iter_mut() {
@@ -216,6 +231,7 @@ pub fn sys_getcwd(buf: *mut u8, len: usize) -> isize {
 /// Get directory entries at a given path. CWD-aware.
 /// Writes newline-separated file names into the user buffer.
 pub fn sys_getdents(path: *const u8, buf: *mut u8, len: usize) -> isize {
+    let process = current_process();
     let token = current_user_token();
     let path_str = translated_str(token, path);
     let root = resolve_root(path_str.as_str());
@@ -249,6 +265,13 @@ pub fn sys_getdents(path: *const u8, buf: *mut u8, len: usize) -> isize {
     let bytes = listing.as_bytes();
     let write_len = core::cmp::min(bytes.len(), len);
 
+    let mut inner = process.inner_exclusive_access();
+    if !inner.memory_set.ensure_private_range((buf as usize).into(), write_len) {
+        return -1;
+    }
+    let token = inner.memory_set.token();
+    drop(inner);
+
     let mut buffers = translated_byte_buffer(token, buf, write_len);
     let mut offset = 0;
     for slice in buffers.iter_mut() {
@@ -265,13 +288,16 @@ pub fn sys_getdents(path: *const u8, buf: *mut u8, len: usize) -> isize {
 
 /// Get the PATH variable for the current process.
 pub fn sys_getpath(buf: *mut u8, len: usize) -> isize {
-    let token = current_user_token();
     let process = current_process();
-    let inner = process.inner_exclusive_access();
+    let mut inner = process.inner_exclusive_access();
     let path = inner.get_path_variable();
+    let write_len = core::cmp::min(path.len(), len);
+    if !inner.memory_set.ensure_private_range((buf as usize).into(), write_len) {
+        return -1;
+    }
+    let token = inner.memory_set.token();
     drop(inner);
     let path_bytes = path.as_bytes();
-    let write_len = core::cmp::min(path_bytes.len(), len);
     let mut buffers = translated_byte_buffer(token, buf, write_len);
     let mut offset = 0;
     for slice in buffers.iter_mut() {

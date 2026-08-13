@@ -1,9 +1,10 @@
 mod context;
 
 use crate::config::TRAMPOLINE;
+use crate::mm::VirtAddr;
 use crate::syscall::syscall;
 use crate::task::{
-    SignalFlags, check_signals_of_current, current_add_signal, current_trap_cx,
+    SignalFlags, check_signals_of_current, current_add_signal, current_process, current_trap_cx,
     current_trap_cx_user_va, current_user_token, exit_current_and_run_next,
     on_current_task_timer_tick, should_preempt_current_task, suspend_current_and_run_next,
 };
@@ -86,8 +87,19 @@ pub fn trap_handler() -> ! {
                 suspend_current_and_run_next();
             }
         }
+        Trap::Exception(Exception::StorePageFault) => {
+            let handled = {
+                let process = current_process();
+                let mut process_inner = process.inner_exclusive_access();
+                process_inner
+                    .memory_set
+                    .handle_cow_fault(VirtAddr::from(stval))
+            };
+            if !handled {
+                current_add_signal(SignalFlags::SIGSEGV);
+            }
+        }
         Trap::Exception(Exception::StoreFault)
-        | Trap::Exception(Exception::StorePageFault)
         | Trap::Exception(Exception::InstructionFault)
         | Trap::Exception(Exception::InstructionPageFault)
         | Trap::Exception(Exception::LoadFault)

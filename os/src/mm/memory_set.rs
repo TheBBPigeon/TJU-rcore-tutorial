@@ -1,4 +1,4 @@
-use super::{FrameTracker, frame_alloc};
+use super::{FrameTracker, frame_alloc, frame_ref_count};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
@@ -39,6 +39,119 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    const MMAP_BASE: usize = 0x2000_0000;
+    const MMAP_END: usize = 0x3000_0000;
+    fn area_conflicts(&self, start: usize, end: usize) -> bool {
+        self.areas.iter().any(|area| {
+            let area_start: usize = VirtAddr::from(area.vpn_range.get_start()).into();
+
+            let area_end: usize = VirtAddr::from(area.vpn_range.get_end()).into();
+
+            start < area_end && area_start < end
+        })
+    }
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> Option<usize> {
+        // 长度必须大于 0，只允许低三位权限。
+        if len == 0 || prot & !0x7 != 0 {
+            return None;
+        }
+
+        // 向上按页对齐，同时防止 usize 溢出。
+        let len = len.checked_add(PAGE_SIZE - 1)? & !(PAGE_SIZE - 1);
+
+        let mut permission = MapPermission::U;
+
+        if prot & 0x1 != 0 {
+            permission |= MapPermission::R;
+        }
+
+        if prot & 0x2 != 0 {
+            /*
+             * RISC-V 中 W=1、R=0 是保留的无效叶子页组合，
+             * 所以可写映射也必须可读。
+             */
+            permission |= MapPermission::R | MapPermission::W;
+        }
+
+        if prot & 0x4 != 0 {
+            permission |= MapPermission::X;
+        }
+
+        // 至少需要可读或可执行。
+        if !permission.intersects(MapPermission::R | MapPermission::X) {
+            return None;
+        }
+
+        let chosen = if start != 0 {
+            // 指定地址必须页对齐。
+            if start % PAGE_SIZE != 0 {
+                return None;
+            }
+
+            let end = start.checked_add(len)?;
+
+            if start < Self::MMAP_BASE || end > Self::MMAP_END || self.area_conflicts(start, end) {
+                return None;
+            }
+
+            start
+        } else {
+            // 自动选址：从 MMAP_BASE 开始逐页尝试。
+            let mut candidate = Self::MMAP_BASE;
+
+            loop {
+                let end = candidate.checked_add(len)?;
+
+                if end > Self::MMAP_END {
+                    return None;
+                }
+
+                if !self.area_conflicts(candidate, end) {
+                    break candidate;
+                }
+
+                candidate = candidate.checked_add(PAGE_SIZE)?;
+            }
+        };
+
+        self.insert_framed_area(chosen.into(), (chosen + len).into(), permission);
+
+        Some(chosen)
+    }
+    pub fn munmap(&mut self, start: usize, len: usize) -> bool {
+        if start % PAGE_SIZE != 0 || len == 0 || len % PAGE_SIZE != 0 {
+            return false;
+        }
+
+        let end = match start.checked_add(len) {
+            Some(end) => end,
+            None => return false,
+        };
+
+        let start_vpn = VirtAddr::from(start).floor();
+        let end_vpn = VirtAddr::from(end).floor();
+
+        let index = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == start_vpn
+                && area.vpn_range.get_end() == end_vpn
+                && area.map_type == MapType::Framed
+                && area.map_perm.contains(MapPermission::U)
+        });
+
+        if let Some(index) = index {
+            let mut area = self.areas.remove(index);
+
+            area.unmap(&mut self.page_table);
+
+            unsafe {
+                asm!("sfence.vma");
+            }
+
+            true
+        } else {
+            false
+        }
+    }
     pub fn new_bare() -> Self {
         Self {
             page_table: PageTable::new(),
@@ -212,6 +325,7 @@ impl MemorySet {
             elf.header.pt2.entry_point() as usize,
         )
     }
+    #[allow(dead_code)]
     pub fn from_existed_user(user_space: &MemorySet) -> MemorySet {
         let mut memory_set = Self::new_bare();
         // map trampoline
@@ -230,6 +344,111 @@ impl MemorySet {
             }
         }
         memory_set
+    }
+    pub fn from_existed_user_cow(user_space: &mut MemorySet) -> MemorySet {
+        let mut memory_set = Self::new_bare();
+        memory_set.map_trampoline();
+
+        let parent_page_table = &mut user_space.page_table;
+        for area in user_space.areas.iter_mut() {
+            let mut new_area = MapArea::from_another(area);
+            for vpn in area.vpn_range {
+                let parent_pte = parent_page_table.translate(vpn).unwrap();
+                let ppn = parent_pte.ppn();
+                let flags = parent_pte.flags();
+
+                if parent_pte.user_accessible() {
+                    assert_eq!(area.map_type, MapType::Framed);
+                    let shared_frame = area
+                        .data_frames
+                        .get(&vpn)
+                        .expect("user page has no FrameTracker")
+                        .clone();
+                    new_area.data_frames.insert(vpn, shared_frame);
+
+                    if parent_pte.writable() || parent_pte.is_cow() {
+                        parent_page_table.mark_cow(vpn);
+                        memory_set.page_table.map_cow(vpn, ppn, flags);
+                    } else {
+                        memory_set.page_table.map(vpn, ppn, flags);
+                    }
+                } else {
+                    new_area.map_one(&mut memory_set.page_table, vpn);
+                    let dst_ppn = memory_set.page_table.translate(vpn).unwrap().ppn();
+                    dst_ppn
+                        .get_bytes_array()
+                        .copy_from_slice(ppn.get_bytes_array());
+                }
+            }
+            memory_set.areas.push(new_area);
+        }
+
+        unsafe { asm!("sfence.vma") };
+        memory_set
+    }
+    pub fn handle_cow_fault(&mut self, fault_va: VirtAddr) -> bool {
+        let vpn = fault_va.floor();
+        let pte = match self.page_table.translate(vpn) {
+            Some(pte) if pte.is_valid() && pte.user_accessible() && pte.is_cow() => pte,
+            _ => return false,
+        };
+        let old_ppn = pte.ppn();
+
+        if frame_ref_count(old_ppn) == 1 {
+            self.page_table.resolve_cow(vpn, old_ppn);
+            unsafe { asm!("sfence.vma") };
+            return true;
+        }
+
+        let new_frame = frame_alloc().expect("COW fault: out of physical memory");
+        let new_ppn = new_frame.ppn;
+        new_ppn
+            .get_bytes_array()
+            .copy_from_slice(old_ppn.get_bytes_array());
+
+        let area = self
+            .areas
+            .iter_mut()
+            .find(|area| area.vpn_range.get_start() <= vpn && vpn < area.vpn_range.get_end());
+        let area = match area {
+            Some(area) if area.map_type == MapType::Framed => area,
+            _ => return false,
+        };
+        let old_frame = area
+            .data_frames
+            .insert(vpn, new_frame)
+            .expect("COW page has no FrameTracker");
+        self.page_table.resolve_cow(vpn, new_ppn);
+        drop(old_frame);
+        unsafe { asm!("sfence.vma") };
+        true
+    }
+    pub fn ensure_private_range(&mut self, start_va: VirtAddr, len: usize) -> bool {
+        if len == 0 {
+            return true;
+        }
+        let start: usize = start_va.into();
+        let end = match start.checked_add(len) {
+            Some(end) => end,
+            None => return false,
+        };
+        let mut vpn = start_va.floor();
+        let end_vpn = VirtAddr::from(end).ceil();
+        while vpn < end_vpn {
+            let pte = match self.page_table.translate(vpn) {
+                Some(pte) if pte.is_valid() && pte.user_accessible() => pte,
+                _ => return false,
+            };
+            if pte.is_cow() {
+                if !self.handle_cow_fault(VirtAddr::from(vpn)) {
+                    return false;
+                }
+            } else if !pte.writable() {
+                return false;
+            }
+            vpn.step();
+        }
+        true
     }
     pub fn activate(&self) {
         let satp = self.page_table.token();
