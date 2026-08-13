@@ -141,11 +141,10 @@ pub fn sys_rename(old_path: *const u8, new_path: *const u8) -> isize {
     let old_path = translated_str(token, old_path);
     let new_path = translated_str(token, new_path);
     let process = current_process();
-    let root = if old_path.starts_with('/') {
-        get_root_inode()
-    } else {
-        process.inner_exclusive_access().get_working_directory()
-    };
+    // Always pass CWD as the root; rename_at's resolve_parent handles
+    // absolute paths (via get_root_inode) and relative paths (via CWD)
+    // independently for old and new paths.
+    let root = process.inner_exclusive_access().get_working_directory();
     rename_at(&root, old_path.as_str(), new_path.as_str())
 }
 
