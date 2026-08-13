@@ -11,11 +11,12 @@ OBJCOPY := rust-objcopy --binary-architecture=riscv64
 CP := cp 
 
 TEST ?= 
+TEST_APP ?= usertests
 
 elf: $(APPS)
 	@cargo build --release
 ifeq ($(TEST), 1)
-	@$(CP) $(TARGET_DIR)/usertests $(TARGET_DIR)/initproc
+	@$(CP) $(TARGET_DIR)/$(TEST_APP) $(TARGET_DIR)/initproc
 endif
 
 binary: elf

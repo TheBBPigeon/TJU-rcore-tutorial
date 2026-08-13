@@ -5,7 +5,7 @@ use crate::syscall::syscall;
 use crate::task::{
     SignalFlags, check_signals_of_current, current_add_signal, current_trap_cx,
     current_trap_cx_user_va, current_user_token, exit_current_and_run_next,
-    suspend_current_and_run_next,
+    on_current_task_timer_tick, should_preempt_current_task, suspend_current_and_run_next,
 };
 use crate::timer::{check_timer, set_next_trigger};
 use core::arch::{asm, global_asm};
@@ -82,6 +82,9 @@ pub fn trap_handler() -> ! {
             // cx is changed during sys_exec, so we have to call it again
             cx = current_trap_cx();
             cx.x[10] = result as usize;
+            if should_preempt_current_task() {
+                suspend_current_and_run_next();
+            }
         }
         Trap::Exception(Exception::StoreFault)
         | Trap::Exception(Exception::StorePageFault)
@@ -105,7 +108,9 @@ pub fn trap_handler() -> ! {
         Trap::Interrupt(Interrupt::SupervisorTimer) => {
             set_next_trigger();
             check_timer();
-            suspend_current_and_run_next();
+            if on_current_task_timer_tick() {
+                suspend_current_and_run_next();
+            }
         }
         Trap::Interrupt(Interrupt::SupervisorExternal) => {
             crate::board::irq_handler();
@@ -174,6 +179,10 @@ pub fn trap_from_kernel(_trap_cx: &TrapContext) {
         Trap::Interrupt(Interrupt::SupervisorTimer) => {
             set_next_trigger();
             check_timer();
+            // The kernel is executing on behalf of the current user task.
+            // Account this tick even though context switching is deferred
+            // until execution returns to user mode.
+            let _ = on_current_task_timer_tick();
             // do not schedule now
         }
         _ => {

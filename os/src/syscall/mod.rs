@@ -25,6 +25,9 @@ const SYSCALL_LSEEK: usize = 62;
 const SYSCALL_GETPATH: usize = 80;
 const SYSCALL_SETPATH: usize = 81;
 const SYSCALL_RENAME: usize = 82;
+const SYSCALL_SET_PRIORITY: usize = 1040;
+const SYSCALL_GET_PRIORITY: usize = 1041;
+const SYSCALL_GET_SCHED_STATS: usize = 1042;
 const SYSCALL_THREAD_CREATE: usize = 1000;
 const SYSCALL_GETTID: usize = 1001;
 const SYSCALL_WAITTID: usize = 1002;
@@ -87,6 +90,11 @@ pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
         SYSCALL_FORK => sys_fork(),
         SYSCALL_EXEC => sys_exec(args[0] as *const u8, args[1] as *const usize),
         SYSCALL_WAITPID => sys_waitpid(args[0] as isize, args[1] as *mut i32),
+        SYSCALL_SET_PRIORITY => sys_set_priority(args[0], args[1]),
+        SYSCALL_GET_PRIORITY => sys_get_priority(args[0]),
+        SYSCALL_GET_SCHED_STATS => {
+            sys_get_sched_stats(args[0], args[1] as *mut crate::task::SchedStats)
+        }
         SYSCALL_THREAD_CREATE => sys_thread_create(args[0], args[1]),
         SYSCALL_GETTID => sys_gettid(),
         SYSCALL_WAITTID => sys_waittid(args[0]) as isize,
