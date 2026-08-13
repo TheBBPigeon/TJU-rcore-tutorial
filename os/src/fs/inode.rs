@@ -21,11 +21,12 @@ pub struct OSInodeInner {
 }
 
 impl OSInode {
-    pub fn new(readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
+    pub fn new(readable: bool, writable: bool, inode: Arc<Inode>, append: bool) -> Self {
+        let offset = if append { inode.size() as usize } else { 0 };
         Self {
             readable,
             writable,
-            inner: unsafe { UPIntrFreeCell::new(OSInodeInner { offset: 0, inode }) },
+            inner: unsafe { UPIntrFreeCell::new(OSInodeInner { offset, inode }) },
         }
     }
     pub fn read_all(&self) -> Vec<u8> {
@@ -56,16 +57,6 @@ pub fn get_root_inode() -> Arc<Inode> {
     ROOT_INODE.clone()
 }
 
-pub fn list_apps() {
-    println!("/**** APPS ****");
-    if let Some(bin_dir) = ROOT_INODE.find("bin") {
-        for app in bin_dir.ls() {
-            println!("{}", app);
-        }
-    }
-    println!("**************/")
-}
-
 bitflags! {
     pub struct OpenFlags: u32 {
         const RDONLY = 0;
@@ -73,6 +64,7 @@ bitflags! {
         const RDWR = 1 << 1;
         const CREATE = 1 << 9;
         const TRUNC = 1 << 10;
+        const APPEND = 1 << 14;
     }
 }
 
@@ -140,6 +132,7 @@ pub fn open_file_at(
     flags: OpenFlags,
 ) -> Option<Arc<OSInode>> {
     let (readable, writable) = flags.read_write();
+    let append = flags.contains(OpenFlags::APPEND);
     if flags.contains(OpenFlags::CREATE) {
         let (parent_path, file_name) = split_path(path);
         let parent = if parent_path.is_empty() || parent_path == "/" {
@@ -154,18 +147,18 @@ pub fn open_file_at(
             if flags.contains(OpenFlags::TRUNC) {
                 inode.clear();
             }
-            Some(Arc::new(OSInode::new(readable, writable, inode)))
+            Some(Arc::new(OSInode::new(readable, writable, inode, append)))
         } else {
             parent
                 .create(file_name)
-                .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
+                .map(|inode| Arc::new(OSInode::new(readable, writable, inode, append)))
         }
     } else {
         lookup_path_from(root, path).map(|inode| {
             if flags.contains(OpenFlags::TRUNC) {
                 inode.clear();
             }
-            Arc::new(OSInode::new(readable, writable, inode))
+            Arc::new(OSInode::new(readable, writable, inode, append))
         })
     }
 }
@@ -286,6 +279,15 @@ pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
 /// Open a file using CWD-aware path resolution.
 pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     open_file_at(&get_root_inode(), name, flags)
+}
+
+/// List application names under /bin (for shell tab-completion).
+pub fn list_app_names() -> Vec<String> {
+    if let Some(bin_dir) = ROOT_INODE.find("bin") {
+        bin_dir.ls()
+    } else {
+        Vec::new()
+    }
 }
 
 impl File for OSInode {

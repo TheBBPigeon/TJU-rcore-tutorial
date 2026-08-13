@@ -1,6 +1,4 @@
 use super::File;
-use crate::drivers::chardev::CharDevice;
-use crate::drivers::chardev::UART;
 use crate::mm::UserBuffer;
 
 pub struct Stdin;
@@ -13,14 +11,8 @@ impl File for Stdin {
     fn writable(&self) -> bool {
         false
     }
-    fn read(&self, mut user_buf: UserBuffer) -> usize {
-        assert_eq!(user_buf.len(), 1);
-        //println!("before UART.read() in Stdin::read()");
-        let ch = UART.read();
-        unsafe {
-            user_buf.buffers[0].as_mut_ptr().write_volatile(ch);
-        }
-        1
+    fn read(&self, user_buf: UserBuffer) -> usize {
+        crate::tty::TTY.read(user_buf)
     }
     fn write(&self, _user_buf: UserBuffer) -> usize {
         panic!("Cannot write to stdin!");

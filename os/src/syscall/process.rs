@@ -1,10 +1,12 @@
+use crate::DEV_NON_BLOCKING_ACCESS;
 use crate::fs::{OpenFlags, get_root_inode, open_file_at};
 use crate::mm::{
     PageTable, VirtAddr, translated_byte_buffer, translated_ref, translated_refmut, translated_str,
 };
 use crate::task::{
-    MAX_PRIORITY, MIN_PRIORITY, SchedStats, SignalFlags, current_process, current_task,
-    current_user_token, exit_current_and_run_next, pid2process, suspend_current_and_run_next,
+    MAX_PRIORITY, MIN_PRIORITY, SchedStats, SignalFlags, add_signal_to_process, continue_process,
+    continue_process_group, current_pgrp, current_process, current_task, current_user_token,
+    exit_current_and_run_next, pid2process, signal_process_group, suspend_current_and_run_next,
 };
 use crate::timer::get_time_ms;
 use alloc::string::String;
@@ -67,6 +69,25 @@ fn write_sched_stats_to_user(stats_ptr: *mut SchedStats, stats: &SchedStats) -> 
         copied += count;
     }
     copied == len
+}
+
+const WUNTRACED: usize = 1;
+
+/// Temporarily switch the block device to synchronous reads and restore it on
+/// drop (including unwinding).
+struct SyncBlockReadGuard;
+
+impl SyncBlockReadGuard {
+    fn enter() -> Self {
+        *DEV_NON_BLOCKING_ACCESS.exclusive_access() = false;
+        Self
+    }
+}
+
+impl Drop for SyncBlockReadGuard {
+    fn drop(&mut self) {
+        *DEV_NON_BLOCKING_ACCESS.exclusive_access() = true;
+    }
 }
 
 pub fn sys_exit(exit_code: i32) -> ! {
@@ -168,8 +189,12 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
         }
         found
     };
+    // Load the ELF with synchronous block reads to avoid the easy-fs
+    // spin-lock deadlock when two pipeline children exec concurrently.
+    let _guard = SyncBlockReadGuard::enter();
     if let Some(app_inode) = app_inode {
         let all_data = app_inode.read_all();
+        drop(_guard);
         if all_data.len() < 4
             || all_data[0] != 0x7f
             || all_data[1] != 0x45
@@ -190,7 +215,8 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
 
 /// If there is not a child process whose pid is same as given, return -1.
 /// Else if there is a child process but it is still running, return -2.
-pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
+/// With `WUNTRACED`, return -3 when a child is stopped but not reaped.
+pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32, options: usize) -> isize {
     let process = current_process();
     // find a child process
 
@@ -202,6 +228,13 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
     {
         return -1;
         // ---- release current PCB
+    }
+    if options & WUNTRACED != 0
+        && inner.children.iter().any(|p| {
+            p.inner_exclusive_access().stopped && (pid == -1 || pid as usize == p.getpid())
+        })
+    {
+        return -3;
     }
     let pair = inner.children.iter().enumerate().find(|(_, p)| {
         // ++++ temporarily access child PCB exclusively
@@ -230,14 +263,63 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
     // ---- release current PCB automatically
 }
 
-pub fn sys_kill(pid: usize, signal: u32) -> isize {
-    if let Some(process) = pid2process(pid) {
-        if let Some(flag) = SignalFlags::from_bits(signal) {
-            process.inner_exclusive_access().signals |= flag;
+pub fn sys_kill(pid: isize, signal: u32) -> isize {
+    let flag = match SignalFlags::from_bits(signal) {
+        Some(flag) => flag,
+        None => return -1,
+    };
+    if flag == SignalFlags::SIGCONT {
+        if pid > 0 {
+            if let Some(process) = pid2process(pid as usize) {
+                continue_process(process);
+                0
+            } else {
+                -1
+            }
+        } else if pid < 0 {
+            continue_process_group((-pid) as usize);
+            0
+        } else {
+            continue_process_group(current_pgrp());
+            0
+        }
+    } else if pid > 0 {
+        if let Some(process) = pid2process(pid as usize) {
+            add_signal_to_process(&process, flag);
             0
         } else {
             -1
         }
+    } else if pid < 0 {
+        signal_process_group((-pid) as usize, flag);
+        0
+    } else {
+        let pgrp = current_process().inner_exclusive_access().pgid;
+        signal_process_group(pgrp, flag);
+        0
+    }
+}
+
+/// Set the process group of `pid` (0 means the calling process).
+/// `pgid` 0 means "make `pid` the group leader".
+pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
+    let current = current_process();
+    let target_pid = if pid == 0 { current.getpid() } else { pid };
+    if let Some(process) = pid2process(target_pid) {
+        let is_self = target_pid == current.getpid();
+        let is_child = process
+            .inner_exclusive_access()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .map(|p| Arc::ptr_eq(&p, &current))
+            .unwrap_or(false);
+        if !is_self && !is_child {
+            return -1;
+        }
+        let mut inner = process.inner_exclusive_access();
+        inner.pgid = if pgid == 0 { target_pid } else { pgid };
+        0
     } else {
         -1
     }
@@ -270,5 +352,44 @@ pub fn sys_get_sched_stats(pid: usize, stats_ptr: *mut SchedStats) -> isize {
         0
     } else {
         -2
+    }
+}
+
+pub fn sys_getpgrp() -> isize {
+    let process = current_process();
+    process.inner_exclusive_access().pgid as isize
+}
+
+pub fn sys_tcsetpgrp(_fd: usize, pgrp: usize) -> isize {
+    if pgrp == 0 || pid2process(pgrp).is_none() {
+        return -1;
+    }
+    crate::tty::TTY.set_fg_pgrp(pgrp);
+    0
+}
+
+pub fn sys_tcgetpgrp(_fd: usize) -> isize {
+    crate::tty::TTY.get_fg_pgrp() as isize
+}
+
+/// Minimal sigaction: act 0 = SIG_DFL, act 1 = SIG_IGN.
+/// `signal` is a SignalFlags bit (e.g. 1 << 2 for SIGINT).
+pub fn sys_sigaction(signal: u32, act: usize) -> isize {
+    let process = current_process();
+    let mut inner = process.inner_exclusive_access();
+    let flag = match SignalFlags::from_bits(signal) {
+        Some(flag) => flag,
+        None => return -1,
+    };
+    match act {
+        0 => {
+            inner.sig_ignored.remove(flag);
+            0
+        }
+        1 => {
+            inner.sig_ignored.insert(flag);
+            0
+        }
+        _ => -1,
     }
 }

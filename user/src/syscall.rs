@@ -42,6 +42,13 @@ const SYSCALL_SEMAPHORE_DOWN: usize = 1022;
 const SYSCALL_CONDVAR_CREATE: usize = 1030;
 const SYSCALL_CONDVAR_SIGNAL: usize = 1031;
 const SYSCALL_CONDVAR_WAIT: usize = 1032;
+const SYSCALL_SETPGID: usize = 1100;
+const SYSCALL_GETPGRP: usize = 1101;
+const SYSCALL_TCSETPGRP: usize = 1102;
+const SYSCALL_TCGETPGRP: usize = 1103;
+const SYSCALL_TTY_CTL: usize = 1104;
+const SYSCALL_SIGACTION: usize = 1105;
+const SYSCALL_LIST_APPS: usize = 1106;
 const SYSCALL_FRAMEBUFFER: usize = 2000;
 const SYSCALL_FRAMEBUFFER_FLUSH: usize = 2001;
 const SYSCALL_EVENT_GET: usize = 3000;
@@ -163,6 +170,10 @@ pub fn sys_waitpid(pid: isize, exit_code: *mut i32) -> isize {
     syscall(SYSCALL_WAITPID, [pid as usize, exit_code as usize, 0])
 }
 
+pub fn sys_waitpid_opts(pid: isize, exit_code: *mut i32, options: usize) -> isize {
+    syscall(SYSCALL_WAITPID, [pid as usize, exit_code as usize, options])
+}
+
 pub fn sys_set_priority(pid: usize, priority: usize) -> isize {
     syscall(SYSCALL_SET_PRIORITY, [pid, priority, 0])
 }
@@ -271,6 +282,34 @@ pub fn sys_rename(old_path: &str, new_path: &str) -> isize {
 
 pub fn sys_lseek(fd: usize, offset: isize, whence: u32) -> isize {
     syscall(SYSCALL_LSEEK, [fd, offset as usize, whence as usize])
+}
+
+pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
+    syscall(SYSCALL_SETPGID, [pid, pgid, 0])
+}
+
+pub fn sys_getpgrp() -> isize {
+    syscall(SYSCALL_GETPGRP, [0, 0, 0])
+}
+
+pub fn sys_tcsetpgrp(fd: usize, pgrp: usize) -> isize {
+    syscall(SYSCALL_TCSETPGRP, [fd, pgrp, 0])
+}
+
+pub fn sys_tcgetpgrp(fd: usize) -> isize {
+    syscall(SYSCALL_TCGETPGRP, [fd, 0, 0])
+}
+
+pub fn sys_tty_ctl(fd: usize, cmd: usize, arg: usize) -> isize {
+    syscall(SYSCALL_TTY_CTL, [fd, cmd, arg])
+}
+
+pub fn sys_sigaction(signal: u32, act: usize) -> isize {
+    syscall(SYSCALL_SIGACTION, [signal as usize, act, 0])
+}
+
+pub fn sys_list_apps(buf: *mut u8, len: usize) -> isize {
+    syscall(SYSCALL_LIST_APPS, [buf as usize, len, 0])
 }
 
 pub fn sys_framebuffer() -> isize {

@@ -38,11 +38,14 @@ pub struct ProcessControlBlockInner {
     pub parent: Option<Weak<ProcessControlBlock>>,
     pub children: Vec<Arc<ProcessControlBlock>>,
     pub exit_code: i32,
+    pub pgid: usize,
+    pub stopped: bool,
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
     pub working_directory: Arc<Inode>,
     pub working_directory_path: String,
     pub path_variable: String,
     pub signals: SignalFlags,
+    pub sig_ignored: SignalFlags,
     pub tasks: Vec<Option<Arc<TaskControlBlock>>>,
     pub task_res_allocator: RecycleAllocator,
     pub mutex_list: Vec<Option<Arc<dyn Mutex>>>,
@@ -51,11 +54,6 @@ pub struct ProcessControlBlockInner {
 }
 
 impl ProcessControlBlockInner {
-    #[allow(unused)]
-    pub fn get_user_token(&self) -> usize {
-        self.memory_set.token()
-    }
-
     pub fn alloc_fd(&mut self) -> usize {
         if let Some(fd) = (0..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
             fd
@@ -116,6 +114,7 @@ impl ProcessControlBlock {
         let (memory_set, ustack_base, entry_point) = MemorySet::from_elf(elf_data);
         // allocate a pid
         let pid_handle = pid_alloc();
+        let pid = pid_handle.0;
         let process = Arc::new(Self {
             pid: pid_handle,
             inner: unsafe {
@@ -125,6 +124,8 @@ impl ProcessControlBlock {
                     parent: None,
                     children: Vec::new(),
                     exit_code: 0,
+                    pgid: pid,
+                    stopped: false,
                     fd_table: vec![
                         // 0 -> stdin
                         Some(Arc::new(Stdin)),
@@ -137,6 +138,7 @@ impl ProcessControlBlock {
                     working_directory_path: String::from("/"),
                     path_variable: String::from("/bin"),
                     signals: SignalFlags::empty(),
+                    sig_ignored: SignalFlags::empty(),
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),
@@ -181,7 +183,14 @@ impl ProcessControlBlock {
         let (memory_set, ustack_base, entry_point) = MemorySet::from_elf(elf_data);
         let new_token = memory_set.token();
         // substitute memory_set
-        self.inner_exclusive_access().memory_set = memory_set;
+        {
+            let mut inner = self.inner_exclusive_access();
+            inner.memory_set = memory_set;
+            // a fresh program starts with default signal dispositions
+            inner.signals = SignalFlags::empty();
+            inner.sig_ignored = SignalFlags::empty();
+            inner.stopped = false;
+        }
         // then we alloc user resource for main thread again
         // since memory_set has been changed
         let task = self.inner_exclusive_access().get_task(0);
@@ -261,11 +270,14 @@ impl ProcessControlBlock {
                     parent: Some(Arc::downgrade(self)),
                     children: Vec::new(),
                     exit_code: 0,
+                    pgid: parent.pgid,
+                    stopped: false,
                     fd_table: new_fd_table,
                     working_directory: parent.working_directory.clone(),
                     working_directory_path: parent.working_directory_path.clone(),
                     path_variable: parent.path_variable.clone(),
                     signals: SignalFlags::empty(),
+                    sig_ignored: parent.sig_ignored,
                     tasks: Vec::new(),
                     task_res_allocator: RecycleAllocator::new(),
                     mutex_list: Vec::new(),

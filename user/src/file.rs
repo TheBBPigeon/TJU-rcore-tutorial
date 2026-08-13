@@ -7,6 +7,7 @@ bitflags! {
         const RDWR = 1 << 1;
         const CREATE = 1 << 9;
         const TRUNC = 1 << 10;
+        const APPEND = 1 << 14;
     }
 }
 

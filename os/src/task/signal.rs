@@ -7,6 +7,8 @@ bitflags! {
         const SIGABRT   = 1 << 6;
         const SIGFPE    = 1 << 8;
         const SIGSEGV   = 1 << 11;
+        const SIGTSTP   = 1 << 20;
+        const SIGCONT   = 1 << 21;
     }
 }
 

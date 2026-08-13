@@ -3,10 +3,11 @@
 ///! Ref: ns16450 datasheet: https://datasheetspdf.com/pdf-file/1311818/NationalSemiconductor/NS16450/1
 use super::CharDevice;
 use crate::sync::{Condvar, UPIntrFreeCell};
-use crate::task::schedule;
 use alloc::collections::VecDeque;
 use bitflags::*;
 use volatile::{ReadOnly, Volatile, WriteOnly};
+
+const MAX_READ_BUFFER: usize = 4096;
 
 bitflags! {
     /// InterruptEnableRegister
@@ -155,17 +156,8 @@ impl<const BASE_ADDR: usize> CharDevice for NS16550a<BASE_ADDR> {
         drop(inner);
     }
 
-    fn read(&self) -> u8 {
-        loop {
-            let mut inner = self.inner.exclusive_access();
-            if let Some(ch) = inner.read_buffer.pop_front() {
-                return ch;
-            } else {
-                let task_cx_ptr = self.condvar.wait_no_sched();
-                drop(inner);
-                schedule(task_cx_ptr);
-            }
-        }
+    fn try_read(&self) -> Option<u8> {
+        self.inner.exclusive_access().read_buffer.pop_front()
     }
     fn write(&self, ch: u8) {
         let mut inner = self.inner.exclusive_access();
@@ -176,7 +168,9 @@ impl<const BASE_ADDR: usize> CharDevice for NS16550a<BASE_ADDR> {
         self.inner.exclusive_session(|inner| {
             while let Some(ch) = inner.ns16550a.read() {
                 count += 1;
-                inner.read_buffer.push_back(ch);
+                if inner.read_buffer.len() < MAX_READ_BUFFER {
+                    inner.read_buffer.push_back(ch);
+                }
             }
         });
         if count > 0 {
