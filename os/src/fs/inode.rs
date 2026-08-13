@@ -126,11 +126,7 @@ pub fn lookup_path_from(root: &Arc<Inode>, path: &str) -> Option<Arc<Inode>> {
 }
 
 /// Open a file at a given path relative to a root inode.
-pub fn open_file_at(
-    root: &Arc<Inode>,
-    path: &str,
-    flags: OpenFlags,
-) -> Option<Arc<OSInode>> {
+pub fn open_file_at(root: &Arc<Inode>, path: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     let (readable, writable) = flags.read_write();
     let append = flags.contains(OpenFlags::APPEND);
     if flags.contains(OpenFlags::CREATE) {
@@ -217,7 +213,11 @@ pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
     // relative paths use the passed-in root (CWD).
     let resolve_parent = |parent_path: &str| -> Option<Arc<Inode>> {
         if parent_path.is_empty() || parent_path == "/" {
-            return Some(if parent_path == "/" { get_root_inode() } else { root.clone() });
+            return Some(if parent_path == "/" {
+                get_root_inode()
+            } else {
+                root.clone()
+            });
         }
         let base = if parent_path.starts_with('/') {
             get_root_inode()
@@ -237,7 +237,11 @@ pub fn rename_at(root: &Arc<Inode>, old_path: &str, new_path: &str) -> isize {
 
     // Same directory: simple rename (compare by inode number, not Arc pointer)
     if old_parent.inode_number() == new_parent.inode_number() {
-        return if old_parent.rename(old_name, new_name) { 0 } else { -1 };
+        return if old_parent.rename(old_name, new_name) {
+            0
+        } else {
+            -1
+        };
     }
 
     // Cross-directory move: link target inode into new parent, then unlink from old

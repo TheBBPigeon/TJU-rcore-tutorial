@@ -141,7 +141,7 @@ UART 硬件 --> 串口驱动(IRQ→环形缓冲+Condvar) --> TTY 行规程(raw/c
   UART 输入缓冲上限、exec 同步读盘 RAII guard。
 - C 组优化（已实现）：`>>` 追加重定向、`2>` 错误重定向、`&&`/`||` 条件执行、
   `kill -SIG`（INT/TSTP/CONT 等）、Delete 键、Ctrl-W 删词、`history -c`、
-  Tab 补全（文件系统应用名 + 内建命令）。
+  Tab 补全（文件系统应用名 + 内建命令 + 当前目录条目 getdents）。
 - 未实现（后续增强）：
   历史持久化；`cd/pwd` 目前为 Shell 侧字符串维护，待成员3的
   `chdir/getcwd` 合入后对接；阻塞式 waitpid 未实现，当前用 `waitpid_nb + sleep`

@@ -153,7 +153,9 @@ fn resolve_root(path: &str) -> Arc<Inode> {
     if path.starts_with('/') {
         get_root_inode()
     } else {
-        current_process().inner_exclusive_access().get_working_directory()
+        current_process()
+            .inner_exclusive_access()
+            .get_working_directory()
     }
 }
 
@@ -163,7 +165,9 @@ pub fn sys_chdir(path: *const u8) -> isize {
     let path = translated_str(token, path);
     let process = current_process();
 
-    let old_path = process.inner_exclusive_access().get_working_directory_path();
+    let old_path = process
+        .inner_exclusive_access()
+        .get_working_directory_path();
     let root = resolve_root(path.as_str());
 
     match lookup_path_from(&root, path.as_str()) {
@@ -212,7 +216,10 @@ pub fn sys_getcwd(buf: *mut u8, len: usize) -> isize {
     let mut inner = process.inner_exclusive_access();
     let cwd_path = inner.get_working_directory_path();
     let write_len = core::cmp::min(cwd_path.len(), len);
-    if !inner.memory_set.ensure_private_range((buf as usize).into(), write_len) {
+    if !inner
+        .memory_set
+        .ensure_private_range((buf as usize).into(), write_len)
+    {
         return -1;
     }
     let token = inner.memory_set.token();
@@ -266,7 +273,10 @@ pub fn sys_getdents(path: *const u8, buf: *mut u8, len: usize) -> isize {
     let write_len = core::cmp::min(bytes.len(), len);
 
     let mut inner = process.inner_exclusive_access();
-    if !inner.memory_set.ensure_private_range((buf as usize).into(), write_len) {
+    if !inner
+        .memory_set
+        .ensure_private_range((buf as usize).into(), write_len)
+    {
         return -1;
     }
     let token = inner.memory_set.token();
@@ -292,7 +302,10 @@ pub fn sys_getpath(buf: *mut u8, len: usize) -> isize {
     let mut inner = process.inner_exclusive_access();
     let path = inner.get_path_variable();
     let write_len = core::cmp::min(path.len(), len);
-    if !inner.memory_set.ensure_private_range((buf as usize).into(), write_len) {
+    if !inner
+        .memory_set
+        .ensure_private_range((buf as usize).into(), write_len)
+    {
         return -1;
     }
     let token = inner.memory_set.token();

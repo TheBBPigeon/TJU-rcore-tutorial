@@ -14,8 +14,8 @@ use core::mem;
 
 use user_lib::{
     OpenFlags, SIG_IGN, TTY_CTL_SET_FLAGS, TTY_ISIG, chdir, close, dup, exec, fork, getcwd,
-    getpgrp, kill, list_apps, open, pipe, read, setpgid, sigaction, sleep, tcsetpgrp, tty_ctl,
-    waitpid_nb, waitpid_nb_opts, write,
+    getdents, getpgrp, kill, list_apps, open, pipe, read, setpgid, sigaction, sleep, tcsetpgrp,
+    tty_ctl, waitpid_nb, waitpid_nb_opts, write,
 };
 
 fn make_prompt() -> String {
@@ -192,6 +192,11 @@ impl LineEditor {
             .filter(|n| n.starts_with(&prefix))
             .cloned()
             .collect();
+        for name in current_dir_entries() {
+            if name.starts_with(&prefix) && !matches.iter().any(|m| m == &name) {
+                matches.push(name);
+            }
+        }
         for b in [
             "cd", "pwd", "echo", "exit", "history", "jobs", "fg", "bg", "kill", "help", "clear",
         ] {
@@ -481,6 +486,24 @@ fn nul(s: &str) -> String {
     r.push_str(s);
     r.push('\0');
     r
+}
+
+/// List names in the current directory using the kernel's getdents.
+#[inline(never)]
+fn current_dir_entries() -> Vec<String> {
+    let mut buf = alloc::vec![0u8; 4096];
+    let n = getdents(".", &mut buf);
+    if n <= 0 {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&buf[..n as usize]);
+    let mut names = Vec::new();
+    for line in text.lines().skip(1) {
+        if let Some(name) = line.strip_prefix("d ").or_else(|| line.strip_prefix("f ")) {
+            names.push(name.to_string());
+        }
+    }
+    names
 }
 
 /// Wait for a foreground child without busy-spinning the CPU. Reports whether
