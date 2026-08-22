@@ -158,6 +158,7 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
             args = args.add(1);
         }
     }
+    let _guard = SyncBlockReadGuard::enter();
     let process = current_process();
     let app_inode = if path.contains('/') {
         // Absolute or relative path: resolve from CWD
@@ -191,7 +192,6 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
     };
     // Load the ELF with synchronous block reads to avoid the easy-fs
     // spin-lock deadlock when two pipeline children exec concurrently.
-    let _guard = SyncBlockReadGuard::enter();
     if let Some(app_inode) = app_inode {
         let all_data = app_inode.read_all();
         drop(_guard);
